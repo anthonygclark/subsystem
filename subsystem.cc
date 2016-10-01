@@ -103,7 +103,7 @@ namespace management
         auto & p = *detail::system_state.get();
         std::lock_guard<decltype(debug_print_lock)> l{debug_print_lock};
 
-        if (!caller)
+        if (caller)
             std::printf("~~~~~~ CALLER : %s ~~~~~~\n", caller);
 
         for (auto & pair : p.map_ref)
@@ -200,7 +200,6 @@ namespace management
             }
         }
 
-        DEBUG_PRINT("%s: ret = %s\n", m_name.c_str(), ret == true ? "true" : "false");
         return ret;
     }
 
@@ -261,22 +260,19 @@ namespace management
         m_parents.insert(k);
     }
 
-#if 0
     void Subsystem::remove_parent(SubsystemTag tag)
     {
         if (!m_parents.count(tag))
         {
-            write_log<WARNING>("%s Subsystem does not contain parent subsystem %s. Skipping\n",
-                               m_name.c_str(), StateTagStrings[tag]);
+            DEBUG_PRINT("%s Subsystem does not contain parent subsystem %s. Skipping\n",
+                        m_name.c_str(), StateNameStrings[tag]);
             return;
         }
 
+        DEBUG_PRINT("%s: Removing Parent 0x%08x\n", m_name.c_str(), tag);
         std::unique_lock<decltype(m_state_change_mutex)> lk(m_state_change_mutex);
         m_parents.erase(tag);
-
-        write_log<DEBUG>("%s now has %d parents\n", m_name.c_str());
     }
-#endif
 
     void Subsystem::commit_state(State new_state)
     {

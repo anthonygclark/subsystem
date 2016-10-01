@@ -112,7 +112,8 @@ namespace management
 
         /**
          * @brief Creates and/or retrieves a reference to a global/statically allocated
-         *      SystemState object.
+         *      SystemState object. TODO There should allowed to be more than one system
+         *      state.
          */
         SystemState & get_system_state();
     }
@@ -191,6 +192,13 @@ namespace management
         void add_parent(Subsystem & parent);
 
         /**
+         * @brief Removes parents dependency
+         * @todo Assess need for this.
+         * @param tag The parent's tag
+         */
+        void remove_parent(SubsystemTag tag);
+
+        /**
          * @brief Removes a child from this subsystem
          * @param child The child tag to remove
          */
@@ -214,8 +222,7 @@ namespace management
          * @param s The state to check
          * @return T, if the state is defines as good; F, otherwise
          */
-        bool is_in_good_state(State s) const
-        {
+        bool is_in_good_state(State s) const {
             return (s == RUNNING);
         }
 
@@ -223,7 +230,9 @@ namespace management
          * @brief Helper to determine if the subsystem has parents.
          * @return T, has parents; F, does not have parents
          */
-        bool has_parents() const { return m_parents.size() > 0; }
+        bool has_parents() const {
+            return m_parents.size() > 0;
+        }
 
         /**
          * @brief Puts a message on this subsystem's message bus
@@ -350,8 +359,7 @@ namespace management
         /**
          * @brief Base implementation of the START trigger
          */
-        void start()
-        {
+        void start() {
             on_start();
             commit_state(RUNNING);
         }
@@ -359,8 +367,7 @@ namespace management
         /**
          * @brief Base implementation of the STOP trigger
          */
-        void stop()
-        {
+        void stop() {
             on_stop();
             commit_state(STOPPED);
         }
@@ -368,8 +375,7 @@ namespace management
         /**
          * @brief Base implementation of the ERROR trigger
          */
-        void error()
-        {
+        void error() {
             on_error();
             commit_state(ERROR);
         }
@@ -384,20 +390,23 @@ namespace management
         /**
          * @return The name of the subsystem
          */
-        std::string const & get_name() const
-        { return m_name; }
+        std::string const & get_name() const {
+            return m_name;
+        }
 
         /**
          * @return The subsystem tag
          */
-        SubsystemTag get_tag() const
-        { return m_tag; }
+        SubsystemTag get_tag() const {
+            return m_tag;
+        }
 
         /**
          * @return The subsystem's current state
          */
-        State get_state() const
-        { return m_state; }
+        State get_state() const {
+            return m_state;
+        }
     };
 
 } // end namespace management
