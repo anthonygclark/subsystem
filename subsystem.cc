@@ -120,8 +120,7 @@ namespace management
     void init_system_state(std::uint32_t n)
     {
         std::call_once(detail::system_state_init_flag,
-                       [&n]()
-                       {
+                       [&n]() {
                            detail::system_state = std::make_unique<detail::SystemState>(n);
                        });
     }
@@ -150,11 +149,8 @@ namespace management
 
     Subsystem::~Subsystem()
     {
-        // consume all left over events
         while(auto trash = m_bus.try_pop());
-        // stop the bus
         stop_bus();
-        // commit delete state
         commit_state(DELETE);
     }
 
@@ -191,8 +187,7 @@ namespace management
             else {
                 /* go into parent map and test if each parent is running */
                 ret = std::all_of(m_parents.begin(), m_parents.end(),
-                                  [this] (parent_mapping_t const & p)
-                                  {
+                                  [this] (parent_mapping_t const & p) {
                                       auto item = m_sysstate_ref.get(p);
                                       auto s = item.first;
                                       return is_in_good_state(s);
@@ -293,15 +288,16 @@ namespace management
             DEBUG_PRINT("%s Subsystem changed state %s->%s\n", m_name.c_str(),
                         StateNameStrings[old], StateNameStrings[m_state]);
 
-            /* construct IPC messages */
-            SubsystemIPC cmsg{SubsystemIPC::CHILD, m_tag, m_state};
-            SubsystemIPC pmsg{SubsystemIPC::PARENT, m_tag, m_state};
-
             DEBUG_PRINT("Firing to %zu parents and %zu children\n",
                         m_parents.size(), m_children.size());
 
-            for_all_active_parents([cmsg, this]  (Subsystem & p) { p.put_message(cmsg); });
-            for_all_active_children([pmsg, this] (Subsystem & c) { c.put_message(pmsg); });
+            for_all_active_parents([this]  (Subsystem & p) {
+                                        p.put_message({SubsystemIPC::CHILD, m_tag, m_state}); 
+                                   });
+
+            for_all_active_children([this] (Subsystem & c) {
+                                        c.put_message({SubsystemIPC::PARENT, m_tag, m_state});
+                                    });
         }
     }
 
