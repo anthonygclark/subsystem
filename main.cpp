@@ -8,7 +8,6 @@ using namespace management;
 #define SIM_MS(X) std::this_thread::sleep_for(std::chrono::milliseconds(X))
 #define SIM_S(X) std::this_thread::sleep_for(std::chrono::seconds(X))
 
-
 struct Os_Subsystem : Subsystem
 {
     Os_Subsystem() :
@@ -17,13 +16,13 @@ struct Os_Subsystem : Subsystem
         SIM_MS(300);
     }
 
-    void on_start() override
-    {
+    void on_start() override {
+        std::cout << __PRETTY_FUNCTION__ << " " << std::this_thread::get_id() << std::endl;
         SIM_MS(200);
     }
 
-    void on_error() override
-    {
+    void on_error() override {
+        std::cout << __PRETTY_FUNCTION__ << " " << std::this_thread::get_id() << std::endl;
         std::printf("%s: Triggering error\n", __PRETTY_FUNCTION__);
     }
 };
@@ -34,37 +33,8 @@ struct Cam_Subsystem : Subsystem
         Subsystem("CAMERA", std::move(parents))
     { }
 
-#if 0
-    void on_parent(SubsystemIPC event) override
-    {
-        // copy
-        auto pair = m_sysstate_ref.get(event.tag);
-
-        auto state = pair.first;
-        auto * parent = pair.second;
-#if 0
-
-        if (state == ERROR)
-        {
-            auto & err = parent->get_last_error();
-
-            if (err == error::code::ESYSTEM)
-                    write_log<DEBUG>("%s skipping ESYSTEM\n", m_name.c_str());
-        }
-#endif
-
-        if (state == RUNNING)
-        {
-            write_log<DEBUG>("........ CAM detected parent is RUNNING\n");
-            start();
-        }
-
-        Subsystem::on_parent(event);
-    }
-#endif
-
-    void on_error() override
-    {
+    void on_error() override {
+        std::cout << __PRETTY_FUNCTION__ << " " << std::this_thread::get_id() << std::endl;
         std::printf("%s: Triggering error\n", __PRETTY_FUNCTION__);
     }
 };
@@ -75,8 +45,8 @@ struct Metadata_Subsystem : Subsystem
         Subsystem("METADATA", std::move(parents))
     { }
 
-    void on_error() override
-    {
+    void on_error() override {
+        std::cout << __PRETTY_FUNCTION__ << " " << std::this_thread::get_id() << std::endl;
         std::printf("%s: Triggering error\n", __PRETTY_FUNCTION__);
     }
 };
@@ -84,6 +54,8 @@ struct Metadata_Subsystem : Subsystem
 
 int main()
 {
+    std::cout << "MAIN: " << std::this_thread::get_id() << std::endl;
+
     init_system_state(sizes::default_max_subsystem_count);
 
     // create

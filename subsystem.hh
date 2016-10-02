@@ -131,7 +131,7 @@ namespace management
          */
         struct SubsystemIPC
         {
-            enum { PARENT, CHILD, DEFFERED } from; /**< originator */
+            enum { PARENT, CHILD, SELF } from; /**< originator */
             SubsystemTag tag; /* The tag of the originator */
             State state; /* The new state of the originator */
         };
@@ -357,28 +357,19 @@ namespace management
 
     public:
         /**
-         * @brief Base implementation of the START trigger
+         * @brief Start trigger
          */
-        void start() {
-            on_start();
-            commit_state(RUNNING);
-        }
+        void start();
 
         /**
-         * @brief Base implementation of the STOP trigger
+         * @brief Stop trigger
          */
-        void stop() {
-            on_stop();
-            commit_state(STOPPED);
-        }
+        void stop();
 
         /**
-         * @brief Base implementation of the ERROR trigger
+         * @brief Error trigger
          */
-        void error() {
-            on_error();
-            commit_state(ERROR);
-        }
+        void error();
 
     public:
         /**

@@ -292,7 +292,7 @@ namespace management
                         m_parents.size(), m_children.size());
 
             for_all_active_parents([this]  (Subsystem & p) {
-                                        p.put_message({SubsystemIPC::CHILD, m_tag, m_state}); 
+                                        p.put_message({SubsystemIPC::CHILD, m_tag, m_state});
                                    });
 
             for_all_active_children([this] (Subsystem & c) {
@@ -338,10 +338,13 @@ namespace management
         case DELETE:
             remove_child(event.tag);
             break;
+        case INIT:
+        case RUNNING:
         case STOPPED:
             break;
         default:
-            break;
+            DEBUG_PRINT("Handling BUS message with improper `state` field\n");
+            return;
         }
 
         /* hand off to the virtual handler */
@@ -364,9 +367,13 @@ namespace management
             // nothing here since children dont react
             // to parents starting
             break;
-        default:
+        case ERROR:
+        case DELETE:
             set_cancel_flag(true);
             break;
+        default:
+            DEBUG_PRINT("Handling BUS message with improper `state` field\n");
+            return;
         }
 
         /* hand off to the virtual handler */
@@ -387,9 +394,25 @@ namespace management
         case RUNNING:
             start();
             break;
+        case INIT:
         default:
             break;
         }
+    }
+
+    void Subsystem::start() {
+        on_start();
+        commit_state(RUNNING);
+    }
+
+    void Subsystem::stop() {
+        on_stop();
+        commit_state(STOPPED);
+    }
+
+    void Subsystem::error() {
+        on_error();
+        commit_state(ERROR);
     }
 
 } // end namespace management
