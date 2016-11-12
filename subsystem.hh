@@ -1,6 +1,12 @@
 #ifndef _SUBSYSTEM_H_
 #define _SUBSYSTEM_H_
 
+/**
+ * @file subsystem.hh
+ * @author Anthony Clark <clark.anthony.g@gmail.com>
+ */
+
+
 #include <algorithm>
 #include <cassert>
 #include <condition_variable>
@@ -27,7 +33,7 @@ namespace management
     /* forward */
     class Subsystem;
 
-    enum State { INIT, RUNNING , STOPPED  , ERROR , DELETE };
+    enum State { INIT, RUNNING , STOPPED , ERROR , DESTROY };
 
     using SubsystemTag = std::uint32_t;
 
@@ -278,16 +284,12 @@ namespace management
                                   auto p = item.second;
 
                                   /* the parent needs to notify all children regardless of
-                                   * state (except DELETE) */
-                                  if (s != DELETE)
+                                   * state (except DESTROY) */
+                                  if (s != DESTROY)
                                       runnable(p);
                               });
             }
 
-        /**
-         * @brief Stops the event bus
-         */
-        void stop_bus();
 
         /**
          * @brief Handles a single subsystem event from a child
@@ -302,6 +304,8 @@ namespace management
          * @param event A by-value event.
          */
         void handle_parent_event(SubsystemIPC event);
+
+        void handle_self_event(SubsystemIPC event);
 
     protected:
         /**
@@ -338,6 +342,12 @@ namespace management
         virtual void on_error() { }
 
         /**
+         * @brief Custom Destroy function
+         * @details Default Implementation
+         */
+        virtual void on_destroy() { }
+
+        /**
          * @brief Action to take when a parent does something
          * @details The default implementation inherits the parent's state
          *          For example, if a parent calls error(), the child
@@ -356,6 +366,11 @@ namespace management
         virtual void on_child(SubsystemIPC event);
 
     public:
+
+        /**
+         * @brief Stops the event bus
+         */
+        void stop_bus();
         /**
          * @brief Start trigger
          */
@@ -370,6 +385,11 @@ namespace management
          * @brief Error trigger
          */
         void error();
+
+        /**
+         * @brief Delete/Destroy trigger
+         */
+        void destroy();
 
     public:
         /**
