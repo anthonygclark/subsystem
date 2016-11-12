@@ -1,4 +1,3 @@
-
 /**
  * @file subsystem.cc
  * @author Anthony Clark <clark.anthony.g@gmail.com>
@@ -137,7 +136,6 @@ namespace management
 
     } // end namespace detail
 
-
 #ifndef NDEBUG
     void print_system_state(const char * caller)
     {
@@ -203,8 +201,7 @@ namespace management
 
     Subsystem::~Subsystem()
     {
-        commit_state(DESTROY);
-        stop_bus();
+        destroy_now();
     }
 
     SubsystemTag Subsystem::generate_tag()
@@ -498,7 +495,6 @@ namespace management
         }
     }
 
-#if 1
     void Subsystem::start() {
         //on_start();
         //commit_state(RUNNING);
@@ -522,22 +518,11 @@ namespace management
         //commit_state(DESTROY);
         put_message({SubsystemIPC::SELF, m_tag, DESTROY});
     }
-#else
-    void Subsystem::start() {
-        on_start();
-        commit_state(RUNNING);
-    }
 
-    void Subsystem::stop() {
-        on_stop();
-        commit_state(STOPPED);
+    void Subsystem::destroy_now() {
+        commit_state(DESTROY);
+        stop_bus();
     }
-
-    void Subsystem::error() {
-        on_error();
-        commit_state(ERROR);
-    }
-#endif
 
 } // end namespace management
 

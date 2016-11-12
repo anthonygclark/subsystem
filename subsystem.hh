@@ -6,7 +6,6 @@
  * @author Anthony Clark <clark.anthony.g@gmail.com>
  */
 
-
 #include <algorithm>
 #include <cassert>
 #include <condition_variable>
@@ -365,12 +364,12 @@ namespace management
          */
         virtual void on_child(SubsystemIPC event);
 
-    public:
-
         /**
          * @brief Stops the event bus
          */
         void stop_bus();
+
+    public:
         /**
          * @brief Start trigger
          */
@@ -390,6 +389,8 @@ namespace management
          * @brief Delete/Destroy trigger
          */
         void destroy();
+        void destroy_now();
+
 
     public:
         /**
