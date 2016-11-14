@@ -1,3 +1,9 @@
+
+/**
+ * @file test.cc
+ * @author Anthony Clark <clark.anthony.g@gmail.com>
+ */
+
 #include <thread>
 #include <iostream>
 
