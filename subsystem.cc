@@ -10,8 +10,8 @@
 
 #include "subsystem.hh"
 #ifndef NDEBUG
-#define ALLOW_DEBUG_PRINT 1
-#define ALLOW_DEBUG2_PRINT 1
+#define ALLOW_DEBUG_PRINT
+#define ALLOW_DEBUG2_PRINT
 
 #include <cstdio>
 #include <mutex>
@@ -55,6 +55,7 @@ namespace management
 {
     namespace
     {
+#ifndef NDEBUG
         constexpr const char * StateNameStrings[] = {
             [INIT]    = "INIT\0",
             [RUNNING] = "RUNNING\0",
@@ -68,6 +69,7 @@ namespace management
             [Subsystem::SubsystemIPC::CHILD] = "CHILD\0",
             [Subsystem::SubsystemIPC::SELF] = "SELF\0"
         };
+#endif
     }
 
     namespace detail
@@ -327,12 +329,12 @@ namespace management
             m_proceed_signal.wait(lk, [this] { return wait_for_parents(); });
 
             /* do the actual state change */
-            auto old = m_state;
-            m_state = new_state;
-            m_sysstate_ref.put(m_tag, m_state);
 
             DEBUG_PRINT("%s Subsystem changed state %s->%s\n", m_name.c_str(),
-                        StateNameStrings[old], StateNameStrings[m_state]);
+                        StateNameStrings[m_state], StateNameStrings[new_state]);
+
+            m_state = new_state;
+            m_sysstate_ref.put(m_tag, m_state);
 
             DEBUG_PRINT("Firing to %zu parents and %zu children\n",
                         m_parents.size(), m_children.size());
