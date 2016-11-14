@@ -10,12 +10,14 @@
 #include <cassert>
 #include <condition_variable>
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <mutex>
 #include <set>
 #include <string>
-#include <initializer_list>
+#include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <pthread.h>
@@ -37,7 +39,10 @@ namespace management
     using SubsystemTag = std::uint32_t;
 
     void init_system_state(std::uint32_t n);
+
+#ifndef NDEBUG
     void print_system_state(const char * caller = nullptr);
+#endif
 
     namespace detail
     {
@@ -66,7 +71,8 @@ namespace management
             std::uint32_t m_max_subsystems;
 
             /**< RW lock for controlling access to the state map
-             * (initialized via NSDMI) */
+             * (initialized via NSDMI). This is specific to glibc and maybe
+             */
             pthread_rwlock_t m_state_lock =
                 PTHREAD_RWLOCK_WRITER_NONRECURSIVE_INITIALIZER_NP;
 
@@ -127,6 +133,9 @@ namespace management
     template<typename M>
         using SubsystemBus = ThreadsafeQueue<M>;
 
+    /**
+     * @brief Subsystem
+     */
     class Subsystem
     {
     public:
@@ -137,8 +146,8 @@ namespace management
         struct SubsystemIPC
         {
             enum { PARENT, CHILD, SELF } from; /**< originator */
-            SubsystemTag tag; /* The tag of the originator */
-            State state; /* The new state of the originator */
+            SubsystemTag tag; /**< The tag of the originator */
+            State state; /**< The new state of the originator */
         };
 
     private:
@@ -245,7 +254,7 @@ namespace management
                                   auto s = item.first;
                                   auto p = item.second;
 
-                                  /* the child will only notify running parents */
+                                  /* the child will only notify only running parents */
                                   if (s == RUNNING)
                                       runnable(p);
                               });
@@ -276,30 +285,31 @@ namespace management
 
         /**
          * @brief Handles a single subsystem event from a child
-         * @details Default implementation
          * @param event A by-value event.
          */
         void handle_child_event(SubsystemIPC event);
 
         /**
          * @brief Handles a single subsystem event from a parent
-         * @details Default implementation
          * @param event A by-value event.
          */
         void handle_parent_event(SubsystemIPC event);
 
+        /**
+         * @brief Handles a single subsystem event from self
+         * @param event A by-value event.
+         */
         void handle_self_event(SubsystemIPC event);
 
     protected:
         /**
          * @brief Contstructor
-         *
          * @param name The name of the subsystem
          * @param tag The tag of the subsystem
          * @param parents A list of parent subsystems
          */
         explicit Subsystem(std::string const & name,
-                           std::initializer_list<std::reference_wrapper<Subsystem>> && parents);
+                           std::initializer_list<std::reference_wrapper<Subsystem>> parents);
 
         /**
          * @brief Destructor
@@ -331,17 +341,18 @@ namespace management
         virtual void on_destroy() { }
 
         /**
-         * @brief Action to take when a parent does something
+         * @brief Action to take when a parent fires an event
          * @details The default implementation inherits the parent's state
          *          For example, if a parent calls error(), the child
-         *          will call error.
+         *          will call error. Unless you want to change this bahavior,
+         *          the base impl should always be called.
          * @param event The IPC message containing the info
          *          about the parent subsystem
          */
         virtual void on_parent(SubsystemIPC event);
 
         /**
-         * @brief Action to take when a child does something
+         * @brief Action to take when a child fires an event
          * @details The default implementation does nothing
          * @param event The IPC message containing the info
          *          about the child subsystem
@@ -403,6 +414,28 @@ namespace management
         State get_state() const {
             return m_state;
         }
+    };
+
+    /**
+     * @brief Subsystem with a managed thread
+     */
+    class ThreadedSubsystem : public Subsystem
+    {
+    private:
+        /**< managed thread. Must be joinable */
+        std::thread m_thread;
+
+    protected:
+        /**
+         * @brief Contstructor
+         * @param name The name of the subsystem
+         * @param tag The tag of the subsystem
+         * @param parents A list of parent subsystems
+         */
+        ThreadedSubsystem(std::string const & name,
+                          std::initializer_list<std::reference_wrapper<Subsystem>> parents);
+
+        ~ThreadedSubsystem();
     };
 
 } // end namespace management

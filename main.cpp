@@ -8,10 +8,10 @@ using namespace management;
 #define SIM_MS(X) std::this_thread::sleep_for(std::chrono::milliseconds(X))
 #define SIM_S(X) std::this_thread::sleep_for(std::chrono::seconds(X))
 
-struct Os_Subsystem : Subsystem
+struct Os_Subsystem : ThreadedSubsystem
 {
     Os_Subsystem() :
-        Subsystem("OS", {})
+        ThreadedSubsystem("OS", {})
     {
         SIM_MS(300);
     }
@@ -25,10 +25,10 @@ struct Os_Subsystem : Subsystem
     }
 };
 
-struct Cam_Subsystem : Subsystem
+struct Cam_Subsystem : ThreadedSubsystem
 {
     explicit Cam_Subsystem(std::initializer_list<std::reference_wrapper<Subsystem>> parents) :
-        Subsystem("CAMERA", std::move(parents))
+        ThreadedSubsystem("CAMERA", std::move(parents))
     { }
 
     void on_error() override {
@@ -36,10 +36,10 @@ struct Cam_Subsystem : Subsystem
     }
 };
 
-struct Metadata_Subsystem : Subsystem
+struct Metadata_Subsystem : ThreadedSubsystem
 {
     explicit Metadata_Subsystem(std::initializer_list<std::reference_wrapper<Subsystem>> parents) :
-        Subsystem("METADATA", std::move(parents))
+       ThreadedSubsystem("METADATA", std::move(parents))
     { }
 
     void on_error() override {
@@ -48,9 +48,9 @@ struct Metadata_Subsystem : Subsystem
 };
 
 
-void full_test()
+void regular_test()
 {
-    std::cout << "full_test: " << std::hash<std::thread::id>()(std::this_thread::get_id()) << std::endl;
+    std::cout << "regular_test: " << std::hash<std::thread::id>()(std::this_thread::get_id()) << std::endl;
 
     // create
     Os_Subsystem os;
@@ -58,9 +58,9 @@ void full_test()
     Metadata_Subsystem metadata{os};
 
     // start threads
-    std::thread os_thread([&os] { while(os.handle_bus_message()); });
-    std::thread cam_thread([&cam] { while(cam.handle_bus_message()); });
-    std::thread metadata_thread([&metadata] { while(metadata.handle_bus_message()); });
+    //std::thread os_thread([&os] { while(os.handle_bus_message()); });
+    //std::thread cam_thread([&cam] { while(cam.handle_bus_message()); });
+    //std::thread metadata_thread([&metadata] { while(metadata.handle_bus_message()); });
 
     os.start();
     SIM_S(1);
@@ -78,27 +78,29 @@ void full_test()
     std::printf(">> RESTARTING THE 'OS' SUBSYSTEM\n");
     os.start();
 
-    SIM_S(2);
+    SIM_MS(100);
 
-    std::printf(">> Joining OS\n");
+    std::printf(">> Destroying OS\n");
     os.destroy_now();
-    os_thread.join();
+    //os_thread.join();
     SIM_MS(100);
 
-    std::printf(">> Joining CAM\n");
+    std::printf(">> Destroying CAM\n");
     cam.destroy_now();
-    cam_thread.join();
+    //cam_thread.join();
     SIM_MS(100);
 
-    std::printf(">> Joining Metadata\n");
+    std::printf(">> Destroying Metadata\n");
     metadata.destroy_now();
-    metadata_thread.join();
+    //metadata_thread.join();
     SIM_MS(100);
 }
+
+
 
 int main()
 {
     init_system_state(sizes::default_max_subsystem_count);
-    full_test();
+    regular_test();
 }
 

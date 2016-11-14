@@ -9,13 +9,12 @@
 #include <mutex>
 
 #include "subsystem.hh"
+
 #ifndef NDEBUG
 #define ALLOW_DEBUG_PRINT
 #define ALLOW_DEBUG2_PRINT
 
 #include <cstdio>
-#include <mutex>
-#include <thread>
 std::mutex debug_print_lock;
 
 #if defined(ALLOW_DEBUG_PRINT)
@@ -180,7 +179,7 @@ namespace management
 
 
     Subsystem::Subsystem(std::string const & name,
-                         std::initializer_list<std::reference_wrapper<Subsystem>> && parents) :
+                         std::initializer_list<std::reference_wrapper<Subsystem>> parents) :
         m_cancel_flag(false),
         m_name(name),
         m_state(State::INIT),
@@ -315,6 +314,9 @@ namespace management
 
     void Subsystem::commit_state(State new_state)
     {
+        /* prevent resurrection and stale message */
+        if (m_state == DESTROY) return;
+
         /* To account for user error and old messages */
         if (m_state == new_state) {
             DEBUG_PRINT("Would commit previous state, skipping...\n");
@@ -325,14 +327,12 @@ namespace management
         {
             /* wait for a start signal */
             std::unique_lock<lock_t> lk{m_state_change_mutex};
-
             m_proceed_signal.wait(lk, [this] { return wait_for_parents(); });
-
-            /* do the actual state change */
 
             DEBUG_PRINT("%s Subsystem changed state %s->%s\n", m_name.c_str(),
                         StateNameStrings[m_state], StateNameStrings[new_state]);
 
+            /* do the actual state change */
             m_state = new_state;
             m_sysstate_ref.put(m_tag, m_state);
 
@@ -402,10 +402,8 @@ namespace management
         on_child(event);
     }
 
-    void Subsystem::on_child(SubsystemIPC event)
-    {
+    void Subsystem::on_child(SubsystemIPC event) {
         (void)event;
-        /* default implementation */
     }
 
     void Subsystem::handle_parent_event(SubsystemIPC event)
@@ -488,6 +486,19 @@ namespace management
     void Subsystem::destroy_now() {
         commit_state(DESTROY);
         stop_bus();
+    }
+
+    ThreadedSubsystem::ThreadedSubsystem(std::string const & name,
+                                         std::initializer_list<std::reference_wrapper<Subsystem>> parents) :
+        Subsystem(name, parents)
+    {
+        m_thread = std::thread{[this] () {
+            while(handle_bus_message());
+        }};
+    }
+
+    ThreadedSubsystem::~ThreadedSubsystem() {
+        m_thread.join();
     }
 
 } // end namespace management
