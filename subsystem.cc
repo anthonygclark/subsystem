@@ -178,7 +178,6 @@ namespace management
                        });
     }
 
-
     Subsystem::Subsystem(std::string const & name,
                          std::initializer_list<std::reference_wrapper<Subsystem>> parents) :
         m_cancel_flag(false),
@@ -230,7 +229,6 @@ namespace management
         /* in the case of no parents, this condition is true */
         if (!has_parents()) {
             ret = true;
-            DEBUG_PRINT2("No parents\n");
         }
         else {
             /* When the cancel flag is temporarily marked as true,
@@ -239,7 +237,6 @@ namespace management
             {
                 set_cancel_flag(false);
                 ret = true;
-                DEBUG_PRINT2("cancel flag\n");
             }
             else {
                 /* go into parent map and test if each parent is running
@@ -253,7 +250,6 @@ namespace management
                                       auto s = item.first;
                                       return (s == RUNNING || s == DESTROY);
                                   });
-                DEBUG_PRINT2("all_of: %s\n", ret ? "true" : "false");
             }
         }
 
