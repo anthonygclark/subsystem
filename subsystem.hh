@@ -92,8 +92,8 @@ namespace management
 
             /**
              * @brief Proxy for insertion into the map via .insert
-             * @param key
-             * @param value
+             * @param key The tag to update
+             * @param value The new value
              */
             void put(key_type key, value_type value);
 
@@ -103,7 +103,7 @@ namespace management
              * @param key The tag to update
              * @param item The new pointer value
              */
-            void put(key_type key, Subsystem & item);
+            void put(key_type key, value_type::second_type::type & item);
 
             /**
              * @brief Proxy for insertion into an existing entry
@@ -147,10 +147,10 @@ namespace management
         /**< Current child tags */
         std::set<SubsystemTag> m_children;
         /**< Cancellation flag, determines if a subsystem can
-         * stop waiting for it's parents
+         * stop waiting for it's parents.
          */
         bool m_cancel_flag;
-        /**< State change lock, see all_parents_running_or_cancel */
+        /**< State change lock */
         std::mutex m_state_change_mutex;
         /**< State change signal */
         std::condition_variable m_proceed_signal;
@@ -197,13 +197,6 @@ namespace management
         void add_parent(Subsystem & parent);
 
         /**
-         * @brief Removes parents dependency
-         * @todo Assess need for this.
-         * @param tag The parent's tag
-         */
-        void remove_parent(SubsystemTag tag);
-
-        /**
          * @brief Removes a child from this subsystem
          * @param child The child tag to remove
          */
@@ -220,16 +213,7 @@ namespace management
          * @brief Tests if all parents are in a good state
          * @return T, If all parents are in a good state; F, otherwise
          */
-        bool all_parents_running_or_cancel();
-
-        /**
-         * @brief Determines if the arg state is a "good" state
-         * @param s The state to check
-         * @return T, if the state is defines as good; F, otherwise
-         */
-        bool is_in_good_state(State s) const {
-            return (s == RUNNING);
-        }
+        bool wait_for_parents();
 
         /**
          * @brief Helper to determine if the subsystem has parents.

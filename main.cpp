@@ -57,8 +57,6 @@ void full_test()
     Cam_Subsystem cam{os};
     Metadata_Subsystem metadata{os};
 
-    print_system_state();
-
     // start threads
     std::thread os_thread([&os] { while(os.handle_bus_message()); });
     std::thread cam_thread([&cam] { while(cam.handle_bus_message()); });
@@ -80,16 +78,10 @@ void full_test()
     std::printf(">> RESTARTING THE 'OS' SUBSYSTEM\n");
     os.start();
 
-    SIM_MS(100);
-
-    std::printf(">> DESTROYING THE 'OS' SUBSYSTEM\n");
-    os.destroy_now();
-
-    print_system_state();
-
-    SIM_MS(100);
+    SIM_S(2);
 
     std::printf(">> Joining OS\n");
+    os.destroy_now();
     os_thread.join();
     SIM_MS(100);
 

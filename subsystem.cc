@@ -9,7 +9,6 @@
 #include <mutex>
 
 #include "subsystem.hh"
-
 #ifndef NDEBUG
 #define ALLOW_DEBUG_PRINT 1
 #define ALLOW_DEBUG2_PRINT 1
@@ -113,7 +112,7 @@ namespace management
             pthread_rwlock_unlock(&m_state_lock);
         }
 
-        void SystemState::put(SystemState::key_type key, Subsystem & ss)
+        void SystemState::put(SystemState::key_type key, SystemState::value_type::second_type::type & ss)
         {
             assert(map_ref.size() >= m_max_subsystems && "Attempting to exceed max number of subsystems");
             auto item = get(key);
@@ -220,7 +219,7 @@ namespace management
         set_cancel_flag(true);
     }
 
-    bool Subsystem::all_parents_running_or_cancel()
+    bool Subsystem::wait_for_parents()
     {
         bool ret = false;
 
@@ -237,12 +236,16 @@ namespace management
                 ret = true;
             }
             else {
-                /* go into parent map and test if each parent is running */
+                /* go into parent map and test if each parent is running
+                 * or each parent is destoryed. The running case is typical
+                 * when we're waiting for parents to start. And the destory case
+                 * is typical when we're waiting for parents to shutdown/destroy
+                 */
                 ret = std::all_of(m_parents.begin(), m_parents.end(),
                                   [this] (parent_mapping_t const & p) {
                                       auto item = m_sysstate_ref.get(p);
                                       auto s = item.first;
-                                      return is_in_good_state(s);
+                                      return (s == RUNNING || s == DESTROY);
                                   });
             }
         }
@@ -308,24 +311,9 @@ namespace management
         m_parents.insert(k);
     }
 
-    void Subsystem::remove_parent(SubsystemTag tag)
-    {
-        std::lock_guard<lock_t> lk(m_state_change_mutex);
-
-        if (!m_parents.count(tag))
-        {
-            DEBUG_PRINT("%s Subsystem does not contain parent subsystem %s. Skipping\n",
-                        m_name.c_str(), StateNameStrings[tag]);
-            return;
-        }
-
-        DEBUG_PRINT("%s: Removing Parent 0x%08x\n", m_name.c_str(), tag);
-        m_parents.erase(tag);
-    }
-
     void Subsystem::commit_state(State new_state)
     {
-        /* To account for user error */
+        /* To account for user error and old messages */
         if (m_state == new_state) {
             DEBUG_PRINT("Would commit previous state, skipping...\n");
             return;
@@ -336,13 +324,7 @@ namespace management
             /* wait for a start signal */
             std::unique_lock<lock_t> lk{m_state_change_mutex};
 
-            if (!lk.owns_lock())
-            {
-                DEBUG_PRINT("CRAAAAP\n");
-                std::abort();
-            }
-
-            m_proceed_signal.wait(lk, [this] { return all_parents_running_or_cancel(); });
+            m_proceed_signal.wait(lk, [this] { return wait_for_parents(); });
 
             /* do the actual state change */
             auto old = m_state;
@@ -404,9 +386,7 @@ namespace management
         {
         case ERROR:
             // propgate error?
-        case DESTROY:
-            remove_child(event.tag);
-            break;
+        case DESTROY: remove_child(event.tag); break;
         case INIT:
         case RUNNING:
         case STOPPED:
@@ -433,14 +413,12 @@ namespace management
         {
         case INIT:
         case RUNNING:
-            // nothing here since children dont react
-            // to parents starting
+            /* Nothing here since children do not react
+             * to parents starting
+             */
             break;
         case ERROR:
-        case DESTROY:
-            //remove_parent(event.tag);
-            set_cancel_flag(true);
-            break;
+        case DESTROY: set_cancel_flag(true); break;
         default:
             DEBUG_PRINT("Handling BUS message with improper `state` field\n");
             return;
@@ -455,17 +433,15 @@ namespace management
         /* handle cancellation flag */
         switch(event.state)
         {
-        case RUNNING:
-            on_start();
-            break;
-        case ERROR:
-            on_error();
-            break;
+        case RUNNING: on_start(); break;
+        case ERROR: on_error(); break;
         case STOPPED:
             on_stop();
+            set_cancel_flag(true);
             break;
         case DESTROY:
             on_destroy();
+            set_cancel_flag(true);
             break;
         default:
             DEBUG_PRINT("Handling BUS message with improper `state` field\n");
@@ -479,16 +455,10 @@ namespace management
     {
         switch(event.state)
         {
-        case ERROR:
-            error();
-            break;
+        case ERROR: error(); break;
         case DESTROY:
-        case STOPPED:
-            stop();
-            break;
-        case RUNNING:
-            start();
-            break;
+        case STOPPED: stop(); break;
+        case RUNNING: start(); break;
         case INIT:
         default:
             break;
@@ -502,20 +472,14 @@ namespace management
     }
 
     void Subsystem::stop() {
-        //on_stop();
-        //commit_state(STOPPED);
         put_message({SubsystemIPC::SELF, m_tag, STOPPED});
     }
 
     void Subsystem::error() {
-        //on_error();
-        //commit_state(ERROR);
         put_message({SubsystemIPC::SELF, m_tag, ERROR});
     }
 
     void Subsystem::destroy() {
-        //while(auto trash = m_bus.try_pop());
-        //commit_state(DESTROY);
         put_message({SubsystemIPC::SELF, m_tag, DESTROY});
     }
 
