@@ -31,10 +31,10 @@ struct Os_Subsystem : ThreadedSubsystem
     }
 };
 
-struct Cam_Subsystem : ThreadedSubsystem
+struct Foo_Subsystem : ThreadedSubsystem
 {
-    explicit Cam_Subsystem(std::initializer_list<std::reference_wrapper<Subsystem>> parents) :
-        ThreadedSubsystem("CAMERA", std::move(parents))
+    explicit Foo_Subsystem(std::initializer_list<std::reference_wrapper<Subsystem>> parents) :
+        ThreadedSubsystem("FOO", std::move(parents))
     { }
 
     void on_error() override {
@@ -42,10 +42,10 @@ struct Cam_Subsystem : ThreadedSubsystem
     }
 };
 
-struct Metadata_Subsystem : ThreadedSubsystem
+struct Bar_Subsystem : ThreadedSubsystem
 {
-    explicit Metadata_Subsystem(std::initializer_list<std::reference_wrapper<Subsystem>> parents) :
-       ThreadedSubsystem("METADATA", std::move(parents))
+    explicit Bar_Subsystem(std::initializer_list<std::reference_wrapper<Subsystem>> parents) :
+       ThreadedSubsystem("BAR", std::move(parents))
     { }
 
     void on_error() override {
@@ -60,18 +60,13 @@ void regular_test()
 
     // create
     Os_Subsystem os;
-    Cam_Subsystem cam{os};
-    Metadata_Subsystem metadata{os};
-
-    // start threads
-    //std::thread os_thread([&os] { while(os.handle_bus_message()); });
-    //std::thread cam_thread([&cam] { while(cam.handle_bus_message()); });
-    //std::thread metadata_thread([&metadata] { while(metadata.handle_bus_message()); });
+    Foo_Subsystem foo{os};
+    Bar_Subsystem metadata{os};
 
     os.start();
     SIM_S(1);
 
-    assert(cam.get_state() == RUNNING);
+    assert(foo.get_state() == RUNNING);
     std::printf(">> ALL SUBSYSTEMS STARTED\n");
 
     SIM_MS(100);
@@ -90,11 +85,11 @@ void regular_test()
     os.destroy();
     SIM_MS(100);
 
-    std::printf(">> Destroying CAM\n");
-    cam.destroy();
+    std::printf(">> Destroying Foo\n");
+    foo.destroy();
     SIM_MS(100);
 
-    std::printf(">> Destroying Metadata\n");
+    std::printf(">> Destroying Bar\n");
     metadata.destroy();
     SIM_MS(100);
 }
