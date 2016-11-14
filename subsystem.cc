@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <cassert>
+#include <cstdint>
 #include <mutex>
 
 #include "subsystem.hh"
@@ -181,6 +182,7 @@ namespace management
     Subsystem::Subsystem(std::string const & name,
                          std::initializer_list<std::reference_wrapper<Subsystem>> parents) :
         m_cancel_flag(false),
+        m_destroyed(false),
         m_name(name),
         m_state(State::INIT),
         m_sysstate_ref(detail::get_system_state())
@@ -201,7 +203,8 @@ namespace management
 
     Subsystem::~Subsystem()
     {
-        destroy_now();
+        if (!m_destroyed)
+            destroy_now();
     }
 
     SubsystemTag Subsystem::generate_tag()
@@ -227,6 +230,7 @@ namespace management
         /* in the case of no parents, this condition is true */
         if (!has_parents()) {
             ret = true;
+            DEBUG_PRINT2("No parents\n");
         }
         else {
             /* When the cancel flag is temporarily marked as true,
@@ -235,11 +239,12 @@ namespace management
             {
                 set_cancel_flag(false);
                 ret = true;
+                DEBUG_PRINT2("cancel flag\n");
             }
             else {
                 /* go into parent map and test if each parent is running
-                 * or each parent is destoryed. The running case is typical
-                 * when we're waiting for parents to start. And the destory case
+                 * or each parent is destroyed. The running case is typical
+                 * when we're waiting for parents to start. And the destroy case
                  * is typical when we're waiting for parents to shutdown/destroy
                  */
                 ret = std::all_of(m_parents.begin(), m_parents.end(),
@@ -248,6 +253,7 @@ namespace management
                                       auto s = item.first;
                                       return (s == RUNNING || s == DESTROY);
                                   });
+                DEBUG_PRINT2("all_of: %s\n", ret ? "true" : "false");
             }
         }
 
@@ -271,7 +277,7 @@ namespace management
             return;
         }
 
-        DEBUG_PRINT("Associating %s subsystem with the %s subystem\n",
+        DEBUG_PRINT("Associating %s subsystem with the %s subsystem\n",
                     m_name.c_str(), child.get_name().c_str());
 
         /* lock here as this can be called from a child,
@@ -387,7 +393,7 @@ namespace management
         switch(event.state)
         {
         case ERROR:
-            // propgate error?
+            // propagate error?
         case DESTROY: remove_child(event.tag); break;
         case INIT:
         case RUNNING:
@@ -486,6 +492,7 @@ namespace management
     void Subsystem::destroy_now() {
         commit_state(DESTROY);
         stop_bus();
+        m_destroyed = true;
     }
 
     ThreadedSubsystem::ThreadedSubsystem(std::string const & name,
@@ -498,6 +505,7 @@ namespace management
     }
 
     ThreadedSubsystem::~ThreadedSubsystem() {
+        destroy_now();
         m_thread.join();
     }
 

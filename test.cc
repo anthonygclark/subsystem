@@ -87,18 +87,15 @@ void regular_test()
     SIM_MS(100);
 
     std::printf(">> Destroying OS\n");
-    os.destroy_now();
-    //os_thread.join();
+    os.destroy();
     SIM_MS(100);
 
     std::printf(">> Destroying CAM\n");
-    cam.destroy_now();
-    //cam_thread.join();
+    cam.destroy();
     SIM_MS(100);
 
     std::printf(">> Destroying Metadata\n");
-    metadata.destroy_now();
-    //metadata_thread.join();
+    metadata.destroy();
     SIM_MS(100);
 }
 

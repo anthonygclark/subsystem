@@ -10,6 +10,8 @@
 #include <cassert>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdint>
+#include <functional>
 #include <initializer_list>
 #include <memory>
 #include <mutex>
@@ -18,7 +20,6 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
-#include <vector>
 
 #include <pthread.h>
 
@@ -33,6 +34,8 @@ namespace management
 {
     /* forward */
     class Subsystem;
+    /* forward */
+    class ThreadedSubsystem;
 
     enum State { INIT, RUNNING , STOPPED , ERROR , DESTROY };
 
@@ -91,7 +94,7 @@ namespace management
 
             /**
              * @brief Proxy for retrieving an item from the map.
-             * @details Note, this is a value type as we dont want to hold references
+             * @details Note, this is a value type as we don't want to hold references
              * @param key The lookup
              */
              value_type get(key_type key);
@@ -159,6 +162,13 @@ namespace management
          * stop waiting for it's parents.
          */
         bool m_cancel_flag;
+        /**< Temporary sentinel to determine if we need to call
+         * the destroy routines while destructing. This exists since
+         * some derived classes may need to explicitly call the destroy
+         * routines before they themselves can be destroyed. And calling
+         * the destroy routines twice might have negative effects.
+         */
+        bool m_destroyed;
         /**< State change lock */
         std::mutex m_state_change_mutex;
         /**< State change signal */
@@ -255,8 +265,7 @@ namespace management
                                   auto p = item.second;
 
                                   /* the child will only notify only running parents */
-                                  if (s == RUNNING)
-                                      runnable(p);
+                                  if (s == RUNNING) runnable(p);
                               });
             }
 
@@ -277,8 +286,7 @@ namespace management
 
                                   /* the parent needs to notify all children regardless of
                                    * state (except DESTROY) */
-                                  if (s != DESTROY)
-                                      runnable(p);
+                                  if (s != DESTROY) runnable(p);
                               });
             }
 
@@ -303,7 +311,7 @@ namespace management
 
     protected:
         /**
-         * @brief Contstructor
+         * @brief Constructor
          * @param name The name of the subsystem
          * @param tag The tag of the subsystem
          * @param parents A list of parent subsystems
@@ -344,7 +352,7 @@ namespace management
          * @brief Action to take when a parent fires an event
          * @details The default implementation inherits the parent's state
          *          For example, if a parent calls error(), the child
-         *          will call error. Unless you want to change this bahavior,
+         *          will call error. Unless you want to change this behavior,
          *          the base impl should always be called.
          * @param event The IPC message containing the info
          *          about the parent subsystem
@@ -384,8 +392,11 @@ namespace management
          * @brief Delete/Destroy trigger
          */
         void destroy();
-        void destroy_now();
 
+        /**
+         * @brief Short circuit to complete destroy state
+         */
+        void destroy_now();
 
     public:
         /**
@@ -427,7 +438,7 @@ namespace management
 
     protected:
         /**
-         * @brief Contstructor
+         * @brief Constructor
          * @param name The name of the subsystem
          * @param tag The tag of the subsystem
          * @param parents A list of parent subsystems
