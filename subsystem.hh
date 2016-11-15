@@ -40,6 +40,7 @@ namespace management
     enum State { INIT, RUNNING , STOPPED , ERROR , DESTROY };
 
     using SubsystemTag = std::uint32_t;
+    using SubsystemParentsList = std::initializer_list<std::reference_wrapper<Subsystem>>;
 
     void init_system_state(std::uint32_t n);
 
@@ -316,8 +317,7 @@ namespace management
          * @param tag The tag of the subsystem
          * @param parents A list of parent subsystems
          */
-        explicit Subsystem(std::string const & name,
-                           std::initializer_list<std::reference_wrapper<Subsystem>> parents);
+        explicit Subsystem(std::string const & name, SubsystemParentsList parents);
 
         /**
          * @brief Destructor
@@ -443,8 +443,7 @@ namespace management
          * @param tag The tag of the subsystem
          * @param parents A list of parent subsystems
          */
-        ThreadedSubsystem(std::string const & name,
-                          std::initializer_list<std::reference_wrapper<Subsystem>> parents);
+        ThreadedSubsystem(std::string const & name, SubsystemParentsList parents);
 
         ~ThreadedSubsystem();
     };

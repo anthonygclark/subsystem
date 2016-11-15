@@ -33,8 +33,8 @@ struct Os_Subsystem : ThreadedSubsystem
 
 struct Foo_Subsystem : ThreadedSubsystem
 {
-    explicit Foo_Subsystem(std::initializer_list<std::reference_wrapper<Subsystem>> parents) :
-        ThreadedSubsystem("FOO", std::move(parents))
+    explicit Foo_Subsystem(SubsystemParentsList parents) :
+        ThreadedSubsystem("FOO", parents)
     { }
 
     void on_error() override {
@@ -44,8 +44,8 @@ struct Foo_Subsystem : ThreadedSubsystem
 
 struct Bar_Subsystem : ThreadedSubsystem
 {
-    explicit Bar_Subsystem(std::initializer_list<std::reference_wrapper<Subsystem>> parents) :
-       ThreadedSubsystem("BAR", std::move(parents))
+    explicit Bar_Subsystem(SubsystemParentsList parents) :
+       ThreadedSubsystem("BAR", parents)
     { }
 
     void on_error() override {
@@ -93,8 +93,6 @@ void regular_test()
     metadata.destroy();
     SIM_MS(100);
 }
-
-
 
 int main()
 {

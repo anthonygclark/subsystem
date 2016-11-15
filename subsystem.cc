@@ -178,8 +178,7 @@ namespace management
                        });
     }
 
-    Subsystem::Subsystem(std::string const & name,
-                         std::initializer_list<std::reference_wrapper<Subsystem>> parents) :
+    Subsystem::Subsystem(std::string const & name, SubsystemParentsList parents) :
         m_cancel_flag(false),
         m_destroyed(false),
         m_name(name),
@@ -316,20 +315,35 @@ namespace management
 
     void Subsystem::commit_state(State new_state)
     {
-        /* prevent resurrection and stale message */
-        if (m_state == DESTROY) return;
+        /* move to function... */
+        auto test_fn = [=] () -> bool {
+            /* To account for user error and old messages */
+            if (m_state == new_state) {
+                DEBUG_PRINT("Would commit previous state (%s), skipping...\n",
+                            StateNameStrings[new_state]);
+                return false;
+            }
+            /* prevent resurrection and stale messages */
+            else if (m_state == DESTROY) {
+                DEBUG_PRINT("Current state is DESTROY, ignoring %s\n",
+                            StateNameStrings[new_state]);
+                return false;
+            }
 
-        /* To account for user error and old messages */
-        if (m_state == new_state) {
-            DEBUG_PRINT("Would commit previous state, skipping...\n");
-            return;
-        }
+            return true;
+        };
+
+        /* test early to avoid blocking if possible */
+        if (!test_fn()) return;
 
         /* scope */
         {
             /* wait for a start signal */
             std::unique_lock<lock_t> lk{m_state_change_mutex};
             m_proceed_signal.wait(lk, [this] { return wait_for_parents(); });
+
+            /* test for spurious messages unordered messages */
+            if (!test_fn()) return;
 
             DEBUG_PRINT("%s Subsystem changed state %s->%s\n", m_name.c_str(),
                         StateNameStrings[m_state], StateNameStrings[new_state]);
@@ -491,8 +505,7 @@ namespace management
         m_destroyed = true;
     }
 
-    ThreadedSubsystem::ThreadedSubsystem(std::string const & name,
-                                         std::initializer_list<std::reference_wrapper<Subsystem>> parents) :
+    ThreadedSubsystem::ThreadedSubsystem(std::string const & name, SubsystemParentsList parents) :
         Subsystem(name, parents)
     {
         m_thread = std::thread{[this] () {
