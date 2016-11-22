@@ -66,7 +66,10 @@ namespace management
             data_type try_pop()
             {
                 std::lock_guard<std::mutex> lk{mutex};
-                if (data_queue.empty()) return nullptr;
+                
+                if (data_queue.empty()) 
+                    return nullptr;
+                
                 data_type value = std::move(data_queue.front());
                 data_queue.pop();
                 return value;
@@ -79,14 +82,11 @@ namespace management
              */
             void push(T new_value)
             {
+                std::lock_guard<std::mutex> lk{mutex};
                 /* Copy/move construct T */
                 data_type data = data_type(new T(std::move(new_value)));
-
-                { // scope
-                    std::lock_guard<std::mutex> lk{mutex};
-                    data_queue.push(std::move(data));
-                }
-
+                
+                data_queue.push(std::move(data));
                 condition.notify_one();
             }
 
@@ -121,14 +121,11 @@ namespace management
              */
             void push(terminator term)
             { 
+                std::lock_guard<std::mutex> lk{mutex};
+                
                 /* should be convertible to our data_type */
                 data_type data = term;
-
-                { // scope
-                    std::lock_guard<std::mutex> lk{mutex};
-                    data_queue.push(std::move(data));
-                }
-
+                data_queue.push(std::move(data));
                 condition.notify_one();
             }
         };

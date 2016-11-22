@@ -45,14 +45,17 @@ namespace management
     void init_system_state(std::uint32_t n);
 
 #ifndef NDEBUG
-    void print_system_state(const char * caller = nullptr);
+    void print_system_state();
 #endif
 
     namespace detail
     {
-        using state_map_t = std::unordered_map<SubsystemTag,
-              std::pair<State, std::reference_wrapper<Subsystem>>,
-              std::hash<SubsystemTag>>;
+        using state_map_t = std::unordered_map
+            <
+                SubsystemTag,
+                std::pair<State, std::reference_wrapper<Subsystem>>,
+                std::hash<SubsystemTag>
+            >;
 
         /**
          * @brief Accessor for the state map
@@ -154,7 +157,7 @@ namespace management
             State state; /**< The new state of the originator */
         };
 
-    private:
+    protected:
         /**< Current parent tags */
         std::set<SubsystemTag> m_parents;
         /**< Current child tags */
@@ -172,10 +175,6 @@ namespace management
         bool m_destroyed;
         /**< State change lock */
         std::mutex m_state_change_mutex;
-        /**< State change signal */
-        std::condition_variable m_proceed_signal;
-        /**< The communication bus between subsystems */
-        SubsystemBus<SubsystemIPC> m_bus;
         /* alias */
         using child_mapping_t = decltype(m_children)::value_type;
         /* alias */
@@ -183,15 +182,21 @@ namespace management
         /* alias */
         using lock_t = decltype(m_state_change_mutex);
 
-    protected:
         /**< The name of the subsystem */
         std::string m_name;
         /**< The current subsystem state */
         State m_state;
         /**< The subsystems tag */
         SubsystemTag m_tag;
+        /**< The communication bus between subsystems */
+        SubsystemBus<SubsystemIPC> m_bus;
         /**< The reference to the managing systemstate */
         detail::SystemState & m_sysstate_ref;
+        /**< State change signal */
+        std::condition_variable m_proceed_signal;
+
+    private:
+        void print_ipc(std::string s, Subsystem::SubsystemIPC const & ipc);
 
     private:
         /**
@@ -258,39 +263,35 @@ namespace management
         template<typename Runnable>
             void for_all_active_parents(Runnable && runnable)
             {
-                std::for_each(m_parents.begin(), m_parents.end(),
-                              [&runnable, this] (parent_mapping_t const & tag)
-                              {
-                                  auto item = m_sysstate_ref.get(tag);
-                                  auto s = item.first;
-                                  auto p = item.second;
+                for (auto & p : m_parents)
+                {
+                    auto target = m_sysstate_ref.get(p);
+                    auto & state = target.first;
+                    auto & subsys = target.second;
 
-                                  /* the child will only notify only running parents */
-                                  if (s == RUNNING) runnable(p);
-                              });
+                    if (state == RUNNING) 
+                        runnable(subsys);
+                }
             }
 
         /**
          * @brief Launches a runnable for each active child subsystem
          * @tparam Runnable The type of the runnable
-         * @param runnable The runnable object
+       * @param runnable The runnable object
          */
         template<typename Runnable>
             void for_all_active_children(Runnable && runnable)
             {
-                std::for_each(m_children.begin(), m_children.end(),
-                              [&runnable, this] (child_mapping_t const & tag)
-                              {
-                                  auto item = m_sysstate_ref.get(tag);
-                                  auto s = item.first;
-                                  auto p = item.second;
+                for (auto & c : m_children)
+                {
+                    auto target = m_sysstate_ref.get(c);
+                    auto & state = target.first;
+                    auto & subsys = target.second;
 
-                                  /* the parent needs to notify all children regardless of
-                                   * state (except DESTROY) */
-                                  if (s != DESTROY) runnable(p);
-                              });
+                    if (state != DESTROY) 
+                        runnable(subsys);
+                }
             }
-
 
         /**
          * @brief Handles a single subsystem event from a child
