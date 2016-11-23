@@ -200,7 +200,6 @@ namespace management
 
     private:
         void print_ipc(std::string s, Subsystem::SubsystemIPC const & ipc);
-    
 
     private:
         /**
@@ -303,6 +302,12 @@ namespace management
          */
         void handle_parent_event(SubsystemIPC event);
 
+        /**
+         * @brief Handles a single subsystem event from self
+         * @param event A by-value event.
+         */
+        void handle_self_event(SubsystemIPC event);
+
     protected:
         /**
          * @brief Constructor
@@ -321,31 +326,25 @@ namespace management
          * @brief Custom Start function
          * @details Default Implementation
          */
-        virtual void on_start() = 0;
+        virtual void on_start() { }
 
         /**
          * @brief Custom Stop function
          * @details Default Implementation
          */
-        virtual void on_stop() = 0;
+        virtual void on_stop() { }
 
         /**
          * @brief Custom Error function
          * @details Default Implementation
          */
-        virtual void on_error() = 0;
+        virtual void on_error() { }
 
         /**
          * @brief Custom Destroy function
          * @details Default Implementation
          */
-        virtual void on_destroy() = 0;
-
-        /**
-         * @brief Handles a single subsystem event from self
-         * @param event A by-value event.
-         */
-        virtual void handle_self_event(SubsystemIPC event) = 0;
+        virtual void on_destroy() { }
 
         /**
          * @brief Action to take when a parent fires an event
@@ -452,12 +451,6 @@ namespace management
          * @param parents A list of parent subsystems
          */
         ThreadedSubsystem(std::string const & name, SubsystemParentsList parents);
-
-        /**
-         * @brief Handles a single subsystem event from self
-         * @param event A by-value event.
-         */
-        void handle_self_event(SubsystemIPC event) override;
 
         virtual ~ThreadedSubsystem();
     };

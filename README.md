@@ -4,65 +4,114 @@ Typically, when logical or physical modules are depenedent, a lot of boilerplate
 
 See `./simple_test.cc` for  simple example.
 
-#### Tutorial
+#### Tutorial (simple_test.cc)
 
 ```c++
-#include <cstdio>
+#include <iostream>
+#include <memory>
+
 #include "subsystem.hh"
 
 using namespace management;
 
-class FirstParent : ThreadedSubsystem
+struct FirstParent : ThreadedSubsystem
 {
 public:
-  FirstParent() :
-      ThreadedSubsystem("FirstParent", {} /* no parents */)
-  { }
-  /* no overridden impls */
+    FirstParent() :
+        ThreadedSubsystem("FirstParent", {} /* no parents */)
+        { }
+
+    virtual ~FirstParent() { }
+
+    void on_start() override {
+        std::fprintf(stderr, "PARENT STARTED\n");
+    }
+
+    void on_error() override {
+        std::fprintf(stderr, "PARENT ERROR\n");
+    }
+
+    void on_stop() override {
+        std::fprintf(stderr, "PARENT STOPPING\n");
+    }
+
+    void on_destroy() override { }
 };
 
-class FirstChild : ThreadedSubsystem
+struct FirstChild : ThreadedSubsystem
 {
 public:
-  FirstChild(SubsystemParentsList parents) :
-      ThreadedSubsystem("FirstChild", parents)
-  {
-  	/* init members */
-  }
-  
-  void on_start() override {
-	/* start members. If members are started at 
-	 * init time, then maybe implement a .start() and
-	 * .stop() for reactive members.
-	 */
-  }
-  
-  void on_error() override {
-    std::printf("ERROR CASE!\n");
-    /* maybe do this... */
-    on_stop();
-  }
- 
-  void on_stop() override {
-    /* put members in a stop state, nothing should
-     * be destroyed yet, just waiting */
-  }
+    FirstChild(SubsystemParentsList parents) :
+        ThreadedSubsystem("FirstChild", parents)
+    {
+        /* init members */
+    }
+
+    virtual ~FirstChild() { }
+
+    void on_start() override
+    {
+        /* start members. If members are started at
+         * init time, then maybe implement a .start() and
+         * .stop() for reactive members.
+         */
+    }
+
+    void on_destroy() override { }
+
+    void on_error() override
+    {
+        std::fprintf(stderr, "CHILD ERROR\n");
+    }
+
+    void on_stop() override
+    {
+        /* put members in a stop state, nothing should
+         * be destroyed yet, just waiting */
+        std::fprintf(stderr, "CHILD STOPPING\n");
+    }
 };
+
+std::unique_ptr<FirstParent> parent;
+std::unique_ptr<FirstChild> child;
+
+#define simulate_work(ms) \
+    std::this_thread::sleep_for(std::chrono::milliseconds(ms))
 
 int main(void)
 {
-  init_system_state(2);
-  FirstParent parent{};
-  FirstChild child{parent};
-  
-  parent.start(); 
-  /* triggers parent.on_start() then child.on_start() */
-  
-  parent.error();
-  /* triggers parent.on_error(), then child.on_error() */
+    std::fprintf(stderr, "Main thread TID %zu\n", std::hash<std::thread::id>()(std::this_thread::get_id()));
 
-  parent.destroy();
-  /* triggers parent.on_destroy(), then child.on_destroy() */
+    init_system_state(2);
+    parent = std::make_unique<FirstParent>();
+    child = std::make_unique<FirstChild>(SubsystemParentsList{*parent.get()});
+
+    simulate_work(500);
+
+    parent->start();
+    /* triggers parent.on_start() then child.on_start() */
+
+    simulate_work(100);
+
+    parent->error();
+    /* triggers parent.on_error(), then child.on_error() */
+
+    simulate_work(100);
+
+    parent->stop();
+    /* triggers parent.on_stop(), then child.on_stop() */
+
+    simulate_work(100);
+
+    parent->destroy();
+    /* triggers parent.on_destroy(), then child.on_destroy() */
+
+    simulate_work(100);
+
+    parent.reset();
+    child.reset();
+
+    return 0;
 }
 ```
 
@@ -75,32 +124,26 @@ clang++ --std=c++14 -Wall -Wextra -Werror simple_test.cc subsystem.cc -ggdb3 -I.
 Yields the following output:
 
 ```
-(subsystem.cc:310, add_parent) DEBUG: FirstChild: Inserting Parent 0x55000000
-(subsystem.cc:275,  add_child) DEBUG: Associating FirstParent subsystem with the FirstChild subsystem
-(subsystem.cc:377, handle_bus_message) DEBUG: (FirstParent) SubsystemIPC: from:SELF, tag:FirstParent, state:RUNNING
-(subsystem.cc:347, commit_state) DEBUG: FirstParent Subsystem changed state INIT->RUNNING
-(subsystem.cc:354, commit_state) DEBUG: Firing to 0 parents and 1 children
-(subsystem.cc:377, handle_bus_message) DEBUG: (FirstParent) SubsystemIPC: from:SELF, tag:FirstParent, state:ERROR
-(subsystem.cc:347, commit_state) DEBUG: FirstParent Subsystem changed state RUNNING->ERROR
-(subsystem.cc:354, commit_state) DEBUG: Firing to 0 parents and 1 children
-(subsystem.cc:377, handle_bus_message) DEBUG: (FirstParent) SubsystemIPC: from:SELF, tag:FirstParent, state:DESTROY
-(subsystem.cc:347, commit_state) DEBUG: FirstParent Subsystem changed state ERROR->DESTROY
-(subsystem.cc:354, commit_state) DEBUG: Firing to 0 parents and 1 children
-(subsystem.cc:377, handle_bus_message) DEBUG: (FirstChild) SubsystemIPC: from:PARENT, tag:FirstParent, state:RUNNING
-(subsystem.cc:377, handle_bus_message) DEBUG: (FirstChild) SubsystemIPC: from:PARENT, tag:FirstParent, state:ERROR
-(subsystem.cc:377, handle_bus_message) DEBUG: (FirstChild) SubsystemIPC: from:PARENT, tag:FirstParent, state:DESTROY
-(subsystem.cc:377, handle_bus_message) DEBUG: (FirstChild) SubsystemIPC: from:SELF, tag:FirstChild, state:RUNNING
-(subsystem.cc:347, commit_state) DEBUG: FirstChild Subsystem changed state INIT->RUNNING
-(subsystem.cc:354, commit_state) DEBUG: Firing to 1 parents and 0 children
-(subsystem.cc:377, handle_bus_message) DEBUG: (FirstChild) SubsystemIPC: from:SELF, tag:FirstChild, state:ERROR
-(subsystem.cc:347, commit_state) DEBUG: FirstChild Subsystem changed state RUNNING->ERROR
-(subsystem.cc:354, commit_state) DEBUG: Firing to 1 parents and 0 children
-(subsystem.cc:377, handle_bus_message) DEBUG: (FirstChild) SubsystemIPC: from:SELF, tag:FirstChild, state:STOPPED
-(subsystem.cc:347, commit_state) DEBUG: FirstChild Subsystem changed state ERROR->STOPPED
-(subsystem.cc:354, commit_state) DEBUG: Firing to 1 parents and 0 children
-(subsystem.cc:347, commit_state) DEBUG: FirstChild Subsystem changed state STOPPED->DESTROY
-(subsystem.cc:354, commit_state) DEBUG: Firing to 1 parents and 0 children
-(subsystem.cc:321, operator()) DEBUG: Would commit previous state (DESTROY), skipping...
+Main thread TID 11136472679203368661
+(subsystem.cc:207 (tid:11136472679203368661     ), Subsystem                ) (FirstParent    ) DEBUG: Creating 'FirstParent' Subsystem with tag 55000000
+(subsystem.cc:207 (tid:11136472679203368661     ), Subsystem                ) (FirstChild     ) DEBUG: Creating 'FirstChild' Subsystem with tag 55000001
+(subsystem.cc:352 (tid:11136472679203368661     ), add_parent               ) (FirstChild     ) DEBUG: Inserting Parent 0x55000000
+(subsystem.cc:306 (tid:11136472679203368661     ), add_child                ) (FirstParent    ) DEBUG: Inserting Child 0x55000001
+PARENT STARTED
+(subsystem.cc:389 (tid:1283900022735240788      ), commit_state             ) (FirstParent    ) DEBUG: Subsystem changed state INIT->RUNNING
+(subsystem.cc:389 (tid:279770860684962401       ), commit_state             ) (FirstChild     ) DEBUG: Subsystem changed state INIT->RUNNING
+PARENT ERROR
+(subsystem.cc:389 (tid:1283900022735240788      ), commit_state             ) (FirstParent    ) DEBUG: Subsystem changed state RUNNING->ERROR
+CHILD ERROR
+PARENT STOPPING
+(subsystem.cc:389 (tid:1283900022735240788      ), commit_state             ) (FirstParent    ) DEBUG: Subsystem changed state ERROR->STOPPED
+(subsystem.cc:389 (tid:1283900022735240788      ), commit_state             ) (FirstParent    ) DEBUG: Subsystem changed state STOPPED->DESTROY
+(subsystem.cc:389 (tid:279770860684962401       ), commit_state             ) (FirstChild     ) DEBUG: Subsystem changed state RUNNING->ERROR
+CHILD STOPPING
+(subsystem.cc:389 (tid:279770860684962401       ), commit_state             ) (FirstChild     ) DEBUG: Subsystem changed state ERROR->STOPPED
+(subsystem.cc:389 (tid:279770860684962401       ), commit_state             ) (FirstChild     ) DEBUG: Subsystem changed state STOPPED->DESTROY
+(subsystem.cc:554 (tid:11136472679203368661     ), ~ThreadedSubsystem       ) (FirstParent    ) DEBUG: Done with thread
+(subsystem.cc:554 (tid:11136472679203368661     ), ~ThreadedSubsystem       ) (FirstChild     ) DEBUG: Done with thread
 ```
 
 *Sorry about the wrapping, debug is verbose*

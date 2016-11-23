@@ -10,11 +10,11 @@
 namespace management
 {
     /**
-     * @brief Simple Locking MPSC threadsafe queue. 
-     * @detail Multiple producer, single consumer. This isn't lockfree as it adheres 
+     * @brief Simple Locking MPSC threadsafe queue.
+     * @detail Multiple producer, single consumer. This isn't lockfree as it adheres
      *      to being MPSC. Searching for ARM-friendly implementations didn't yeild too
      *      many results. Since this queue is used for low throughput transports, i.e., IPC.
-     *     
+     *
      *      This implementation will *own* the data given to it - as a true IPC system does.
      *
      *      This is mainly verbatim from Anthony William's 'C++ Concurrency in Action'
@@ -66,10 +66,10 @@ namespace management
             data_type try_pop()
             {
                 std::lock_guard<std::mutex> lk{mutex};
-                
-                if (data_queue.empty()) 
+
+                if (data_queue.empty())
                     return nullptr;
-                
+
                 data_type value = std::move(data_queue.front());
                 data_queue.pop();
                 return value;
@@ -85,7 +85,7 @@ namespace management
                 std::lock_guard<std::mutex> lk{mutex};
                 /* Copy/move construct T */
                 data_type data = data_type(new T(std::move(new_value)));
-                
+
                 data_queue.push(std::move(data));
                 condition.notify_one();
             }
@@ -98,10 +98,10 @@ namespace management
             /**
              * @return The size of the queue
              */
-            int size() const 
-            { 
+            int size() const
+            {
                 std::lock_guard<std::mutex> lk{mutex};
-                return data_queue.size(); 
+                return data_queue.size();
             }
 
         private:
@@ -120,9 +120,9 @@ namespace management
              * @param term Terminator type to tell the queue to stop
              */
             void push(terminator term)
-            { 
+            {
                 std::lock_guard<std::mutex> lk{mutex};
-                
+
                 /* should be convertible to our data_type */
                 data_type data = term;
                 data_queue.push(std::move(data));
