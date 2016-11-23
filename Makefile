@@ -4,7 +4,7 @@ all:
 
 release:
 	clang++ --std=c++14 -Wall -Wextra -Werror test.cc subsystem.cc -Ofast -I. -DNDEBUG -lpthread -lrt -o test
-	clang++ --std=c++14 -Wall -Wextra -Werror simple_test.cc subsystem.cc -Ofast -I. -DNDEBUG -lpthread -lrt -o simple_Test
+	clang++ --std=c++14 -Wall -Wextra -Werror simple_test.cc subsystem.cc -Ofast -I. -DNDEBUG -lpthread -lrt -o simple_test
 
 clean:
-	rm test simple_test
+	$(RM) test simple_test

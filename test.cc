@@ -92,8 +92,6 @@ void regular_test()
     std::printf(">> Destroying Bar\n");
     bar.destroy();
     SIM_MS(100);
-
-    foo.force_signal(); bar.force_signal(); os.force_signal();
 }
 
 int main()
