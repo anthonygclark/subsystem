@@ -429,11 +429,6 @@ namespace management
         return true;
     }
 
-    void Subsystem::force_signal()
-    {
-        m_proceed_signal.notify_one();
-    }
-
     void Subsystem::set_cancel_flag(bool b)
     {
         m_cancel_flag = b;

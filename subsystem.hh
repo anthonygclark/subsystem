@@ -403,8 +403,6 @@ namespace management
          */
         void destroy();
 
-        void force_signal();
-
     public:
         /**
          * @brief Handles a single bus message
