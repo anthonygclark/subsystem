@@ -61,7 +61,7 @@ void regular_test()
     // create
     Os_Subsystem os;
     Foo_Subsystem foo{os};
-    Bar_Subsystem metadata{os};
+    Bar_Subsystem bar{os};
 
     os.start();
     SIM_S(1);
@@ -90,8 +90,10 @@ void regular_test()
     SIM_MS(100);
 
     std::printf(">> Destroying Bar\n");
-    metadata.destroy();
+    bar.destroy();
     SIM_MS(100);
+
+    foo.force_signal(); bar.force_signal(); os.force_signal();
 }
 
 int main()

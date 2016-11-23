@@ -1,5 +1,7 @@
-#include <cstdio>
+#include <iostream>
 #include "subsystem.hh"
+#include "threadsafe_queue.hh"
+#include <csignal>
 
 using namespace management;
 
@@ -21,7 +23,8 @@ public:
     void on_stop() override {
         std::fprintf(stderr, "STOPPING\n");
     }
-    /* no overridden impls */
+
+    void on_destroy() override { }
 };
 
 struct FirstChild : ThreadedSubsystem
@@ -42,6 +45,8 @@ public:
          */
     }
 
+    void on_destroy() override { }
+
     void on_error() override {
         std::fprintf(stderr, "ERROR CASE!\n");
         /* maybe do this... */
@@ -51,35 +56,55 @@ public:
     void on_stop() override {
         /* put members in a stop state, nothing should
          * be destroyed yet, just waiting */
+        std::fprintf(stderr, "STOPPPPPPING!\n");
     }
 };
 
+std::unique_ptr<FirstParent> parent;
+std::unique_ptr<FirstChild> child;
+
 int main(void)
 {
-    bool sleeps = false;
+    std::fprintf(stderr, "Main thread TID %zu\n", std::hash<std::thread::id>()(std::this_thread::get_id()));
 
+    bool s = false;
     init_system_state(2);
-    FirstParent parent{};
-    FirstChild child{parent};
+    parent = std::make_unique<FirstParent>();
+    child = std::make_unique<FirstChild>(SubsystemParentsList{*parent.get()});
 
-    std::this_thread::sleep_for(std::chrono::seconds(3));
+    std::signal(SIGUSR1, [](int sig) { (void)sig; if(parent) parent->force_signal(); if(child) child->force_signal(); });
 
-    parent.start(); 
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    parent->start(); 
     /* triggers parent.on_start() then child.on_start() */
-    if (sleeps) std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    if (s) std::this_thread::sleep_for(std::chrono::seconds(1));
 
-    parent.error();
+    parent->error();
     /* triggers parent.on_error(), then child.on_error() */
-    if (sleeps) std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    if (s) std::this_thread::sleep_for(std::chrono::seconds(1));
 
-    parent.stop();
+    parent->stop();
     /* triggers parent.on_stop(), then child.on_stop() */
-    if (sleeps) std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    if (s) std::this_thread::sleep_for(std::chrono::seconds(1));
 
-    parent.destroy();
-    /* triggers parent.on_destroy(), then child.on_destroy() */
-    if (sleeps) std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    parent->destroy();
+    ///* triggers parent.on_destroy(), then child.on_destroy() */
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    
+    if(parent) 
+        parent->force_signal();
+    
+    if(child)
+        child->force_signal();
+    
+    parent.reset(); 
+    child.reset();
+    
+    std::this_thread::sleep_for(std::chrono::seconds(1));
 
-    return 0;
+    return 5;
 }
 

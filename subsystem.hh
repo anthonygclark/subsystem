@@ -7,6 +7,7 @@
  */
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <condition_variable>
 #include <cstdint>
@@ -47,6 +48,8 @@ namespace management
 #ifndef NDEBUG
     void print_system_state();
 #endif
+
+    ThreadsafeQueue<std::string> & get_log_queue();
 
     namespace detail
     {
@@ -165,7 +168,7 @@ namespace management
         /**< Cancellation flag, determines if a subsystem can
          * stop waiting for it's parents.
          */
-        bool m_cancel_flag;
+        std::atomic_bool m_cancel_flag;
         /**< Temporary sentinel to determine if we need to call
          * the destroy routines while destructing. This exists since
          * some derived classes may need to explicitly call the destroy
@@ -197,17 +200,13 @@ namespace management
 
     private:
         void print_ipc(std::string s, Subsystem::SubsystemIPC const & ipc);
+    
 
     private:
         /**
          * @return A unique tag for this subsystem
          */
         SubsystemTag generate_tag();
-
-        /**
-         * @brief Commits the state to the subsystem table
-         */
-        void commit_state(State state);
 
         /**
          * @brief Adds a child to this subsystem
@@ -223,16 +222,15 @@ namespace management
 
         /**
          * @brief Removes a child from this subsystem
-         * @param child The child tag to remove
+         * @param tag The child tag to remove
          */
-        void remove_child(SubsystemTag child);
+        void remove_child(SubsystemTag tag);
 
         /**
-         * @brief Sets the cancellation flag.
-         * @details This bypasses any wait state the subsystem is in
-         * @param b The flag value to set
+         * @brief Removes a parent from this subsystem
+         * @param tag The parent tag to remove
          */
-        void set_cancel_flag(bool b);
+        void remove_parent(SubsystemTag tag);
 
         /**
          * @brief Tests if all parents are in a good state
@@ -269,7 +267,7 @@ namespace management
                     auto & state = target.first;
                     auto & subsys = target.second;
 
-                    if (state == RUNNING) 
+                    if (state == RUNNING)
                         runnable(subsys);
                 }
             }
@@ -288,7 +286,7 @@ namespace management
                     auto & state = target.first;
                     auto & subsys = target.second;
 
-                    if (state != DESTROY) 
+                    if (state != DESTROY)
                         runnable(subsys);
                 }
             }
@@ -304,12 +302,6 @@ namespace management
          * @param event A by-value event.
          */
         void handle_parent_event(SubsystemIPC event);
-
-        /**
-         * @brief Handles a single subsystem event from self
-         * @param event A by-value event.
-         */
-        void handle_self_event(SubsystemIPC event);
 
     protected:
         /**
@@ -329,25 +321,31 @@ namespace management
          * @brief Custom Start function
          * @details Default Implementation
          */
-        virtual void on_start() { }
+        virtual void on_start() = 0;
 
         /**
          * @brief Custom Stop function
          * @details Default Implementation
          */
-        virtual void on_stop() { }
+        virtual void on_stop() = 0;
 
         /**
          * @brief Custom Error function
          * @details Default Implementation
          */
-        virtual void on_error() { }
+        virtual void on_error() = 0;
 
         /**
          * @brief Custom Destroy function
          * @details Default Implementation
          */
-        virtual void on_destroy() { }
+        virtual void on_destroy() = 0;
+
+        /**
+         * @brief Handles a single subsystem event from self
+         * @param event A by-value event.
+         */
+        virtual void handle_self_event(SubsystemIPC event) = 0;
 
         /**
          * @brief Action to take when a parent fires an event
@@ -367,6 +365,18 @@ namespace management
          *          about the child subsystem
          */
         virtual void on_child(SubsystemIPC event);
+
+        /**
+         * @brief Sets the cancellation flag.
+         * @details This bypasses any wait state the subsystem is in
+         * @param b The flag value to set
+         */
+        void set_cancel_flag(bool b);
+
+        /**
+         * @brief Commits the state to the subsystem table
+         */
+        void commit_state(State state);
 
         /**
          * @brief Stops the event bus
@@ -394,10 +404,7 @@ namespace management
          */
         void destroy();
 
-        /**
-         * @brief Short circuit to complete destroy state
-         */
-        void destroy_now();
+        void force_signal();
 
     public:
         /**
@@ -446,7 +453,13 @@ namespace management
          */
         ThreadedSubsystem(std::string const & name, SubsystemParentsList parents);
 
-        ~ThreadedSubsystem();
+        /**
+         * @brief Handles a single subsystem event from self
+         * @param event A by-value event.
+         */
+        void handle_self_event(SubsystemIPC event) override;
+
+        virtual ~ThreadedSubsystem();
     };
 
 } // end namespace management

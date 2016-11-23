@@ -19,24 +19,24 @@
 std::mutex debug_print_lock;
 
 #if defined(ALLOW_DEBUG_PRINT)
-#define DEBUG_PRINT(x, ...)                                                                              \
-    do {                                                                                                 \
-        std::lock_guard<decltype(debug_print_lock)> lk{debug_print_lock};                                \
-        std::printf("\x1b[1m(%s:%d (tid:%-25zu), %-25s)\x1b[0m\x1b[1m\x1b[34m (%-15s) DEBUG:\x1b[0m " x, \
-                    __FILE__, __LINE__, std::hash<std::thread::id>()(std::this_thread::get_id()),        \
-                    __func__, m_name.c_str(), ##__VA_ARGS__);                                            \
+#define DEBUG_PRINT(x, ...)                                                                                       \
+    do {                                                                                                          \
+        std::lock_guard<decltype(debug_print_lock)> lk{debug_print_lock};                                         \
+        std::fprintf(stderr, "\x1b[1m(%s:%d (tid:%-25zu), %-25s)\x1b[0m\x1b[1m\x1b[34m (%-15s) DEBUG:\x1b[0m " x, \
+                    __FILE__, __LINE__, std::hash<std::thread::id>()(std::this_thread::get_id()),                 \
+                    __func__, m_name.c_str(), ##__VA_ARGS__);                                                     \
     } while(0)
 #else
 #define DEBUG_PRINT(x, ...) ((void)0)
 #endif
 
 #if defined(ALLOW_DEBUG2_PRINT)
-#define DEBUG_PRINT2(x, ...)                                                                              \
-    do {                                                                                                  \
-        std::lock_guard<decltype(debug_print_lock)> lk{debug_print_lock};                                 \
-        std::printf("\x1b[1m(%s:%d (tid:%-25zu), %-25s)\x1b[0m\x1b[1m\x1b[31m (%-15s) DEBUG: \x1b[0m " x, \
-                    __FILE__, __LINE__, std::hash<std::thread::id>()(std::this_thread::get_id()),         \
-                    __func__, m_name.c_str(), ##__VA_ARGS__);                                             \
+#define DEBUG_PRINT2(x, ...)                                                                                       \
+    do {                                                                                                           \
+        std::lock_guard<decltype(debug_print_lock)> lk{debug_print_lock};                                          \
+        std::fprintf(stderr, "\x1b[1m(%s:%d (tid:%-25zu), %-25s)\x1b[0m\x1b[1m\x1b[31m (%-15s) DEBUG: \x1b[0m " x, \
+                    __FILE__, __LINE__, std::hash<std::thread::id>()(std::this_thread::get_id()),                  \
+                    __func__, m_name.c_str(), ##__VA_ARGS__);                                                      \
     } while(0)
 #else
 #define DEBUG_PRINT2(x, ...) ((void)0)
@@ -51,8 +51,23 @@ std::mutex debug_print_lock;
 #endif
 #endif
 
+#if 0
+#define D() DEBUG_PRINT2("\n")
+#define DD(x) DEBUG_PRINT2("%s\n", x)
+#else
+#define D() ((void)0)
+#define DD(x) ((void)0)
+#endif
+
 namespace management
 {
+    
+    ThreadsafeQueue<std::string> & get_log_queue()
+    {
+        static ThreadsafeQueue<std::string> ret;
+        return ret;
+    }
+
     namespace detail
     {
         std::once_flag system_state_init_flag;
@@ -155,6 +170,9 @@ namespace management
     void Subsystem::print_ipc(std::string s, Subsystem::SubsystemIPC const & ipc)
     {
         auto & p = detail::get_system_state();
+        (void)p;
+        (void)s;
+        (void)ipc;
 
         DEBUG_PRINT("(%s) SubsystemIPC: from:%s, tag:%s, state:%s\n",
                     s.c_str(), StateIPCNameStrings[ipc.from],
@@ -202,8 +220,6 @@ namespace management
 
     Subsystem::~Subsystem()
     {
-        if (!m_destroyed)
-            destroy_now();
     }
 
     SubsystemTag Subsystem::generate_tag()
@@ -218,6 +234,7 @@ namespace management
 
     void Subsystem::stop_bus()
     {
+        D();
         DEBUG_PRINT2("Stopping bus...1\n");
 
         while(auto trash = m_bus.try_pop()) {
@@ -229,18 +246,24 @@ namespace management
 
         set_cancel_flag(true);
         DEBUG_PRINT2("Stopping bus...2\n");
+
+        D();
     }
 
     bool Subsystem::wait_for_parents()
     {
         bool ret = false;
 
+        D();
+
         /* in the case of no parents, this condition is true */
         if (!has_parents()) {
             ret = true;
+            D();
         }
         else if (m_state == DESTROY) {
             ret = true;
+            D();
         }
         else {
             /* When the cancel flag is temporarily marked as true,
@@ -249,6 +272,7 @@ namespace management
             {
                 //set_cancel_flag(false);
                 ret = true;
+                D();
             }
             else {
                 /* go into parent map and test if each parent is running
@@ -262,6 +286,8 @@ namespace management
                                       auto s = item.first;
                                       return (s == RUNNING || s == DESTROY);
                                   });
+                auto s = std::to_string(ret);
+                DD(s.c_str());
             }
         }
 
@@ -270,12 +296,14 @@ namespace management
 
     void Subsystem::put_message(SubsystemIPC msg)
     {
+        D();
         //print_ipc(__func__, msg);
         m_bus.push(msg);
     }
 
     void Subsystem::add_child(Subsystem & child)
     {
+        D();
         /* lock here as this can be called from a child,
          * ie - m_parents->add_child(this) */
         std::lock_guard<lock_t> lk{m_state_change_mutex};
@@ -297,6 +325,7 @@ namespace management
 
     void Subsystem::remove_child(SubsystemTag tag)
     {
+        D();
         std::lock_guard<lock_t> lk{m_state_change_mutex};
 
         if (!m_children.count(tag))
@@ -309,8 +338,24 @@ namespace management
         m_children.erase(tag);
     }
 
+    void Subsystem::remove_parent(SubsystemTag tag)
+    {
+        D();
+        std::lock_guard<lock_t> lk{m_state_change_mutex};
+
+        if (!m_parents.count(tag))
+        {
+            DEBUG_PRINT("Subsystem does not contain parent subsystem %s. Skipping\n",
+                        StateNameStrings[tag]);
+            return;
+        }
+
+        m_parents.erase(tag);
+    }
+
     void Subsystem::add_parent(Subsystem & parent)
     {
+        D();
         std::lock_guard<lock_t> lk(m_state_change_mutex);
 
         auto k = parent.get_tag();
@@ -329,6 +374,7 @@ namespace management
 
     void Subsystem::commit_state(State new_state)
     {
+        D();
         /* move to function... */
         static auto test_fn = [this] (State old_state, State new_state) -> bool {
             /* To account for user error and old messages */
@@ -351,33 +397,34 @@ namespace management
         if (!test_fn(m_state, new_state))
             return;
 
-        /* scope */
-        {
-            /* wait for a start signal */
-            std::unique_lock<lock_t> lk{m_state_change_mutex};
+        D();
+        /* wait for a start signal */
+        std::unique_lock<lock_t> lk{m_state_change_mutex};
 
-            /* spurious wakeup prevention */
-            while (!wait_for_parents())
-                m_proceed_signal.wait(lk, [this] { return wait_for_parents(); });
+        D();
+        /* spurious wakeup prevention */
+        while (!wait_for_parents())
+            m_proceed_signal.wait(lk, [this] { return wait_for_parents(); });
 
-            DEBUG_PRINT("Subsystem changed state %s->%s\n",
-                        StateNameStrings[m_state], StateNameStrings[new_state]);
+        D();
+        DEBUG_PRINT("Subsystem changed state %s->%s\n",
+                    StateNameStrings[m_state], StateNameStrings[new_state]);
 
-            /* do the actual state change */
-            m_state = new_state;
-            m_sysstate_ref.put(m_tag, m_state);
+        /* do the actual state change */
+        m_state = new_state;
+        m_sysstate_ref.put(m_tag, m_state);
 
-            //DEBUG_PRINT("Firing to %zu parents and %zu children\n",
-            //            m_parents.size(), m_children.size());
+        //DEBUG_PRINT("Firing to %zu parents and %zu children\n",
+        //            m_parents.size(), m_children.size());
 
-            for_all_active_parents([this] (Subsystem & p) {
-                                        p.put_message({SubsystemIPC::CHILD, m_tag, m_state});
-                                   });
+        for_all_active_parents([this] (Subsystem & p) {
+                                    p.put_message({SubsystemIPC::CHILD, m_tag, m_state});
+                               });
 
-            for_all_active_children([this] (Subsystem & c) {
-                                        c.put_message({SubsystemIPC::PARENT, m_tag, m_state});
-                                    });
-        }
+        for_all_active_children([this] (Subsystem & c) {
+                                    c.put_message({SubsystemIPC::PARENT, m_tag, m_state});
+                                });
+        D();
     }
 
     bool Subsystem::handle_bus_message()
@@ -388,11 +435,11 @@ namespace management
         if (item == decltype(m_bus)::terminator()) {
             DEBUG_PRINT2("%s GOT BUS TERMINATOR\n", m_name.c_str());
             /* notify the last waiting state or external waiters */
-            m_proceed_signal.notify_all();
+            m_proceed_signal.notify_one();
             return false;
         }
 
-        //print_ipc(std::string(__func__), *item.get());
+        print_ipc(std::string(__func__), *item.get());
 
         switch(item->from)
         {
@@ -400,17 +447,25 @@ namespace management
         case SubsystemIPC::CHILD  : handle_child_event(*item.get()); break;
         case SubsystemIPC::SELF   : handle_self_event(*item.get()); break;
         /* TODO exception */
-        default : DEBUG_PRINT("Handling bus message with improper `from` field\n"); break;
+        default : 
+            DEBUG_PRINT("Handling bus message with improper `from` field\n");
+            return true;
         }
 
-        /* notify the last waiting state or external waiters */
-        m_proceed_signal.notify_all();
+        /* notify the last waiting state or external waihers */
+        m_proceed_signal.notify_one();
 
         return true;
     }
 
+    void Subsystem::force_signal()
+    {
+        m_proceed_signal.notify_one();
+    }
+
     void Subsystem::set_cancel_flag(bool b)
     {
+        D();
         m_cancel_flag = b;
     }
 
@@ -428,12 +483,15 @@ namespace management
             return;
         }
 
+        D();
         /* hand off to the virtual handler */
         on_child(event);
     }
 
     void Subsystem::on_child(SubsystemIPC event) {
         /* empty default impl */
+        (void)event;
+        D();
     }
 
     void Subsystem::handle_parent_event(SubsystemIPC event)
@@ -444,32 +502,18 @@ namespace management
         case INIT:
         case RUNNING:
         case ERROR: break;
-        case DESTROY: set_cancel_flag(true); break;
+        case STOPPED: break;
+        case DESTROY: set_cancel_flag(true); remove_parent(event.tag); break;
         default:
             DEBUG_PRINT("Handling BUS message with improper `state` field\n");
             return;
         }
 
+        D();
         /* hand off to the virtual handler */
         on_parent(event);
     }
 
-    void Subsystem::handle_self_event(SubsystemIPC event)
-    {
-        /* handle cancellation flag */
-        switch(event.state)
-        {
-        case RUNNING: on_start(); break;
-        case ERROR: on_error(); break;
-        case STOPPED: set_cancel_flag(true); on_stop(); break;
-        case DESTROY: set_cancel_flag(true); on_destroy(); break;
-        default:
-            DEBUG_PRINT("Handling BUS message with improper `state` field\n");
-            return;
-        }
-
-        commit_state(event.state);
-    }
 
     void Subsystem::on_parent(SubsystemIPC event)
     {
@@ -483,6 +527,8 @@ namespace management
         default:
             break;
         }
+
+        D();
     }
 
     void Subsystem::start() {
@@ -501,24 +547,14 @@ namespace management
         put_message({SubsystemIPC::SELF, m_tag, DESTROY});
     }
 
-    void Subsystem::destroy_now()
-    {
-        on_destroy();
-
-        commit_state(DESTROY);
-        stop_bus();
-        m_destroyed = true;
-    }
-
     ThreadedSubsystem::ThreadedSubsystem(std::string const & name, SubsystemParentsList parents) :
         Subsystem(name, parents)
     {
-        m_thread = std::thread{[this] () {
+        m_thread = std::thread{[this] ()
+        {
             while(handle_bus_message()) {
                 std::this_thread::yield();
             }
-
-            DEBUG_PRINT2("!!!!!!!!!!!!!!!!!!! Done with event bus\n");
 
             std::unique_lock<lock_t> lk{m_state_change_mutex};
             std::notify_all_at_thread_exit(m_proceed_signal, std::move(lk));
@@ -527,9 +563,35 @@ namespace management
 
     ThreadedSubsystem::~ThreadedSubsystem()
     {
-        destroy_now();
         m_thread.join();
         DEBUG_PRINT2("Done with thread\n");
+    }
+
+    void ThreadedSubsystem::handle_self_event(SubsystemIPC event)
+    {
+        /* handle cancellation flag */
+        switch(event.state)
+        {
+        case RUNNING:
+            on_start(); break;
+        case ERROR:
+            on_error(); break;
+        case STOPPED:
+            on_stop(); break;
+        case DESTROY:
+            {
+                set_cancel_flag(true);
+                on_destroy();
+                stop_bus();
+                break;
+            }
+        default:
+            DEBUG_PRINT("Handling BUS message with improper `state` field\n");
+            return;
+        }
+
+        D();
+        commit_state(event.state);
     }
 
 } // end namespace management
