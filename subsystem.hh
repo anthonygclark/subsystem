@@ -169,13 +169,6 @@ namespace management
          * stop waiting for it's parents.
          */
         std::atomic_bool m_cancel_flag;
-        /**< Temporary sentinel to determine if we need to call
-         * the destroy routines while destructing. This exists since
-         * some derived classes may need to explicitly call the destroy
-         * routines before they themselves can be destroyed. And calling
-         * the destroy routines twice might have negative effects.
-         */
-        bool m_destroyed;
         /**< State change lock */
         std::mutex m_state_change_mutex;
         /* alias */

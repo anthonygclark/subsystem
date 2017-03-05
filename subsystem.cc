@@ -196,7 +196,6 @@ namespace management
 
     Subsystem::Subsystem(std::string const & name, SubsystemParentsList parents) :
         m_cancel_flag(false),
-        m_destroyed(false),
         m_name(name),
         m_state(State::INIT),
         m_sysstate_ref(detail::get_system_state())
