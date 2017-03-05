@@ -71,7 +71,7 @@ namespace management
          * @details Having a 'global' map of subsystems complicates access, but reduces
          *          complexity of the subsystem class.
          */
-        struct SystemState final
+        struct SubsystemMap final
         {
             /* alias */
             using key_type = state_map_t::key_type;
@@ -92,12 +92,12 @@ namespace management
             /**
              * @brief Binding constructor
              */
-            explicit SystemState(std::uint32_t max_subsystems = sizes::default_max_subsystem_count) noexcept;
+            explicit SubsystemMap(std::uint32_t max_subsystems = sizes::default_max_subsystem_count) noexcept;
 
             /**
              * @brief Destructor
              */
-            ~SystemState();
+            ~SubsystemMap();
 
             /**
              * @brief Proxy for retrieving an item from the map.
@@ -133,10 +133,10 @@ namespace management
 
         /**
          * @brief Creates and/or retrieves a reference to a global/statically allocated
-         *      SystemState object. TODO There should allowed to be more than one system
+         *      SubsystemMap object. TODO There should allowed to be more than one system
          *      state.
          */
-        SystemState & get_system_state();
+        SubsystemMap & get_system_state();
     }
 
     /**< Alias/typedef for the systemstate bus */
@@ -194,7 +194,7 @@ namespace management
         /**< The communication bus between subsystems */
         SubsystemBus<SubsystemIPC> m_bus;
         /**< The reference to the managing systemstate */
-        detail::SystemState & m_sysstate_ref;
+        detail::SubsystemMap & m_sysstate_ref;
         /**< State change signal */
         std::condition_variable m_proceed_signal;
 

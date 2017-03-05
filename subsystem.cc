@@ -74,7 +74,7 @@ namespace management
 
         /**< System state instance.
          * Created in init_system_state() */
-        std::unique_ptr<detail::SystemState> system_state;
+        std::unique_ptr<detail::SubsystemMap> system_state;
 
         state_map_t & create_or_get_state_map()
         {
@@ -82,27 +82,27 @@ namespace management
             return map;
         }
 
-        SystemState::SystemState(std::uint32_t max_subsystems) noexcept :
+        SubsystemMap::SubsystemMap(std::uint32_t max_subsystems) noexcept :
             m_max_subsystems(max_subsystems),
             map_ref(create_or_get_state_map())
         {
             map_ref.reserve(m_max_subsystems);
         }
 
-        SystemState::~SystemState()
+        SubsystemMap::~SubsystemMap()
         {
             pthread_rwlock_destroy(&m_state_lock);
         }
 
-        SystemState::value_type SystemState::get(SystemState::key_type key)
+        SubsystemMap::value_type SubsystemMap::get(SubsystemMap::key_type key)
         {
             pthread_rwlock_rdlock(&m_state_lock);
-            SystemState::value_type ret = map_ref.at(key);
+            SubsystemMap::value_type ret = map_ref.at(key);
             pthread_rwlock_unlock(&m_state_lock);
             return ret;
         }
 
-        void SystemState::put(SystemState::key_type key, SystemState::value_type value)
+        void SubsystemMap::put(SubsystemMap::key_type key, SubsystemMap::value_type value)
         {
             pthread_rwlock_wrlock(&m_state_lock);
             map_ref.erase(key);
@@ -110,7 +110,7 @@ namespace management
             pthread_rwlock_unlock(&m_state_lock);
         }
 
-        void SystemState::put(SystemState::key_type key, SystemState::value_type::second_type::type & ss)
+        void SubsystemMap::put(SubsystemMap::key_type key, SubsystemMap::value_type::second_type::type & ss)
         {
             assert(map_ref.size() >= m_max_subsystems && "Attempting to exceed max number of subsystems");
             auto item = get(key);
@@ -118,14 +118,14 @@ namespace management
             put(key, std::make_pair(item.first, item.second));
         }
 
-        void SystemState::put(SystemState::key_type key, State state)
+        void SubsystemMap::put(SubsystemMap::key_type key, State state)
         {
             auto item = get(key);
             put(key, std::make_pair(state, item.second));
             assert(get(key).first == state && __PRETTY_FUNCTION__);
         }
 
-        SystemState & get_system_state()
+        SubsystemMap & get_system_state()
         {
             assert(system_state && "System state not initialized. Call init_system_state(n) before starting subsystems");
             return *(system_state.get());
@@ -190,7 +190,7 @@ namespace management
     {
         std::call_once(detail::system_state_init_flag,
                        [&n]() {
-                           detail::system_state = std::make_unique<detail::SystemState>(n);
+                           detail::system_state = std::make_unique<detail::SubsystemMap>(n);
                        });
     }
 
@@ -548,7 +548,6 @@ namespace management
         m_thread.join();
         DEBUG_PRINT("Done with thread\n");
     }
-
 
 } // end namespace management
 
