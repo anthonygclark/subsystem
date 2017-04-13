@@ -23,6 +23,9 @@
 
 #include "threadsafe_queue.hh"
 
+/* Comment this out to not use/throw exceptions */
+#define SUBSYSTEM_USE_EXCEPTIONS
+
 namespace sizes
 {
     constexpr const std::size_t default_max_subsystem_count = 16;
@@ -30,9 +33,6 @@ namespace sizes
 
 namespace management
 {
-    /* forward */
-    class Subsystem;
-
     /**
      * \enum Subsystem state
      */
@@ -130,6 +130,7 @@ namespace management
     /**
      * @brief Subsystem
      */
+    template<typename Bus>
     class Subsystem
     {
     public:
@@ -169,7 +170,7 @@ namespace management
         /**< The subsystems tag */
         SubsystemTag m_tag;
         /**< The communication bus between subsystems */
-        SubsystemBus<SubsystemIPC> m_bus;
+        Bus m_bus;
         /**< The reference to the managing systemstate */
         SubsystemMap & m_subsystem_map_ref;
         /**< State change signal */
@@ -179,37 +180,122 @@ namespace management
         /**
          * @return A unique tag for this subsystem
          */
-        SubsystemTag generate_tag();
+        SubsystemTag generate_tag() const
+        {
+            static std::mutex tag_lock;
+            static SubsystemTag current = SubsystemTag{};
+
+            std::lock_guard<decltype(tag_lock)> lk{tag_lock};
+
+            return (0x55000000 | ++current);
+        }
 
         /**
          * @brief Adds a child to this subsystem
          * @param child The child pointer to add
          */
-        void add_child(Subsystem & child);
+        void add_child(Subsystem & child)
+        {
+            /* lock here as this can be called from a child,
+             * ie - m_parents->add_child(this) */
+            std::lock_guard<lock_t> lk{m_state_change_mutex};
+
+            auto k = child.get_tag();
+
+            /* Subsystem already contains child */
+            if (m_children.count(k)) {
+                return;
+            }
+
+            m_children.insert(k);
+        }
 
         /**
          * @brief Adds a parent to this subsystem
          * @param parent The parent pointer to add
          */
-        void add_parent(Subsystem & parent);
+        void add_parent(Subsystem & parent)
+        {
+            std::lock_guard<lock_t> lk(m_state_change_mutex);
+
+            auto k = parent.get_tag();
+
+            if (m_parents.count(k)) {
+                return;
+            }
+
+            m_parents.insert(k);
+        }
 
         /**
          * @brief Removes a child from this subsystem
          * @param tag The child tag to remove
          */
-        void remove_child(SubsystemTag tag);
+        void remove_child(SubsystemTag tag)
+        {
+            std::lock_guard<lock_t> lk{m_state_change_mutex};
+
+            if (!m_children.count(tag)) {
+                return;
+            }
+
+            m_children.erase(tag);
+        }
 
         /**
          * @brief Removes a parent from this subsystem
          * @param tag The parent tag to remove
          */
-        void remove_parent(SubsystemTag tag);
+        void remove_parent(SubsystemTag tag)
+        {
+            std::lock_guard<lock_t> lk{m_state_change_mutex};
+
+            if (!m_parents.count(tag)) {
+                return;
+            }
+
+            m_parents.erase(tag);
+        }
 
         /**
          * @brief Tests if all parents are in a good state
          * @return T, If all parents are in a good state; F, otherwise
          */
-        bool wait_for_parents();
+        bool wait_for_parents()
+        {
+            bool ret = false;
+
+            if (!has_parents()) {
+                ret = true;
+            }
+            else if (m_state == SubsystemState::DESTROY) {
+                ret = true;
+            }
+            else {
+                /* When the cancel flag is temporarily marked as true,
+                 * count this as a cancel and reset it */
+                if (m_cancel_flag == true)
+                {
+                    set_cancel_flag(false);
+                    ret = true;
+                }
+                else {
+                    /* go into parent map and test if each parent is running
+                     * or each parent is destroyed. The running case is typical
+                     * when we're waiting for parents to start. And the destroy case
+                     * is typical when we're waiting for parents to shutdown/destroy
+                     */
+                    ret = std::all_of(m_parents.begin(), m_parents.end(),
+                                      [this] (parent_mapping_t const & p) {
+                                      auto item = m_subsystem_map_ref.get(p);
+                                      auto s = item.first;
+                                      return (s == SubsystemState::RUNNING || s == SubsystemState::DESTROY);
+                                      });
+                }
+            }
+
+            return ret;
+        }
 
         /**
          * @brief Helper to determine if the subsystem has parents.
@@ -224,7 +310,12 @@ namespace management
          * @details Intended to be called from other subsystems as IPC
          * @param msg The state-change message to send
          */
-        void put_message(SubsystemIPC msg);
+        void put_message(SubsystemIPC msg)
+        {
+            m_bus.push(msg);
+            m_proceed_signal.notify_one();
+        }
+
 
         /**
          * @brief Launches a runnable for each active parent subsystem
@@ -268,36 +359,139 @@ namespace management
          * @brief Handles a single subsystem event from a child
          * @param event A by-value event.
          */
-        void handle_child_event(SubsystemIPC event);
+        void handle_child_event(SubsystemIPC event)
+        {
+            switch(event.state)
+            {
+            case SubsystemState::DESTROY:
+                remove_child(event.tag);
+                break;
+            case SubsystemState::INIT:
+            case SubsystemState::RUNNING:
+            case SubsystemState::STOPPED:
+            case SubsystemState::ERROR:
+                break;
+            default:
+                return;
+            }
+
+            /* hand off to the virtual handler */
+            on_child(event);
+        }
 
         /**
          * @brief Handles a single subsystem event from a parent
          * @param event A by-value event.
          */
-        void handle_parent_event(SubsystemIPC event);
+        void handle_parent_event(SubsystemIPC event)
+        {
+            /* handle cancellation flag */
+            switch(event.state)
+            {
+            case SubsystemState::INIT:
+            case SubsystemState::RUNNING:
+            case SubsystemState::ERROR:
+                break;
+            case SubsystemState::STOPPED:
+                break;
+            case SubsystemState::DESTROY:
+                {
+                    set_cancel_flag(true);
+                    remove_parent(event.tag);
+                    break;
+                }
+            default:
+                return;
+            }
+
+            /* hand off to the virtual handler */
+            on_parent(event);
+        }
 
         /**
          * @brief Handles a single subsystem event from self
          * @param event A by-value event.
          */
-        void handle_self_event(SubsystemIPC event);
+        void handle_self_event(SubsystemIPC event)
+        {
+            /* handle cancellation flag */
+            switch(event.state)
+            {
+            case SubsystemState::RUNNING:
+                on_start(); break;
+            case SubsystemState::ERROR:
+                on_error(); break;
+            case SubsystemState::STOPPED:
+                on_stop(); break;
+            case SubsystemState::DESTROY:
+                {
+                    set_cancel_flag(true);
+                    on_destroy();
+                    stop_bus();
+                    break;
+                }
+            default:
+                return;
+            }
+
+            commit_state(event.state);
+        }
 
         /**
          * @brief Sets the cancellation flag.
          * @details This bypasses any wait state the subsystem is in
          * @param b The flag value to set
          */
-        void set_cancel_flag(bool b);
+        void set_cancel_flag(bool b)
+        {
+            m_cancel_flag = b;
+        }
 
         /**
          * @brief Commits the state to the subsystem table
          */
-        void commit_state(SubsystemState state);
+        void commit_state(SubsystemState state)
+        {
+            if ((m_state == new_state) ||
+                (m_state == SubsystemState::DESTROY))
+            {
+                return;
+            }
+
+            /* wait for a start signal */
+            std::unique_lock<lock_t> lk{m_state_change_mutex};
+
+            /* spurious wakeup prevention */
+            while (!wait_for_parents()) {
+                m_proceed_signal.wait(lk, [this] { return wait_for_parents(); });
+            }
+
+            /* do the actual state change */
+            m_state = new_state;
+            m_subsystem_map_ref.put(m_tag, m_state);
+
+            for_all_active_parents([this] (Subsystem & p) {
+                                   p.put_message({SubsystemIPC::CHILD, m_tag, m_state});
+                                   });
+
+            for_all_active_children([this] (Subsystem & c) {
+                                    c.put_message({SubsystemIPC::PARENT, m_tag, m_state});
+                                    });
+        }
 
         /**
          * @brief Stops the event bus
          */
-        void stop_bus();
+        void stop_bus()
+        {
+            while(auto trash = m_bus.try_pop()) {
+                /* ignore things here */
+            }
+
+            m_bus.terminate();
+
+            set_cancel_flag(true);
+        }
 
     protected:
         /**
@@ -308,7 +502,25 @@ namespace management
          */
         Subsystem(std::string const & name,
                   SubsystemMap & m,
-                  SubsystemParentsList parents);
+                  SubsystemParentsList parents) :
+            m_cancel_flag(false),
+            m_name(name),
+            m_state(SubsystemState::INIT),
+            m_subsystem_map_ref(map)
+        {
+            m_tag = Subsystem::generate_tag();
+
+            /* Create a map of parents */
+            for (auto & parent_item : parents)
+            {
+                /* add to parents */
+                add_parent(parent_item.get());
+                /* add this to the parent */
+                parent_item.get().add_child(*this);
+            }
+
+            m_subsystem_map_ref.put(m_tag, {m_state, std::ref(*this)});
+        }
 
         Subsystem(Subsystem const &) = delete;
 
@@ -350,7 +562,23 @@ namespace management
          * @param event The IPC message containing the info
          *          about the parent subsystem
          */
-        virtual void on_parent(SubsystemIPC event);
+        virtual void on_parent(SubsystemIPC event)
+        {
+            switch(event.state)
+            {
+            case SubsystemState::ERROR:
+                error(); break;
+            case SubsystemState::DESTROY:
+                destroy(); break;
+            case SubsystemState::STOPPED:
+                stop(); break;
+            case SubsystemState::RUNNING:
+                start(); break;
+            case SubsystemState::INIT:
+            default:
+                break;
+            }
+        }
 
         /**
          * @brief Action to take when a child fires an event
@@ -358,35 +586,86 @@ namespace management
          * @param event The IPC message containing the info
          *          about the child subsystem
          */
-        virtual void on_child(SubsystemIPC event);
+        virtual void on_child(SubsystemIPC event) {
+            /* empty default impl */
+            (void)event;
+        }
+
+        virtual bool handle_ipc_message(SubsystemIPC event)
+        {
+            switch(event.from)
+            {
+            case SubsystemIPC::PARENT:
+                handle_parent_event(event);
+                break;
+            case SubsystemIPC::CHILD:
+                handle_child_event(event);
+                break;
+            case SubsystemIPC::SELF:
+                handle_self_event(event);
+                break;
+            default:
+#ifdef SUBSYSTEM_USE_EXCEPTIONS
+                throw std::runtime_error("Invalid from field in SubsystemIPC");
+#else
+                /* ignore? */
+                return true;
+#endif
+            }
+
+            /* notify the last waiting state or external waihers */
+            m_proceed_signal.notify_one();
+
+            return true;
+        }
 
     public:
         /**
          * @brief Start trigger
          */
-        void start();
+        void start() {
+            put_message({SubsystemIPC::SELF, m_tag, SubsystemState::RUNNING});
+        }
 
         /**
          * @brief Stop trigger
          */
-        void stop();
+        void stop() {
+            put_message({SubsystemIPC::SELF, m_tag, SubsystemState::STOPPED});
+        }
 
         /**
          * @brief Error trigger
          */
-        void error();
+        void error() {
+            put_message({SubsystemIPC::SELF, m_tag, SubsystemState::ERROR});
+        }
 
         /**
          * @brief Delete/Destroy trigger
          */
-        void destroy();
+        void destroy() {
+            put_message({SubsystemIPC::SELF, m_tag, SubsystemState::DESTROY});
+        }
 
     public:
         /**
          * @brief Handles a single bus message
          * @return T, if the message was valid; F, if /the terminator was caught
          */
-        bool handle_bus_message();
+        virtual bool handle_bus_message()
+        {
+            auto item = m_bus.wait_and_pop();
+
+            /* detect termination */
+            if (item == decltype(m_bus)::terminator()) {
+                /* notify the last waiting state or external waiters */
+                m_proceed_signal.notify_one();
+                return false;
+            }
+
+            handle_ipc_message(*item.get());
+        }
 
         /**
          * @return The name of the subsystem
@@ -415,6 +694,7 @@ namespace management
      * @details This is useful if you want the subsystem to execute start/stop/error/destroy
      *          in its own thread. Usually this is desired.
      */
+    template<typename... Ts>
     class ThreadedSubsystem : public Subsystem
     {
     private:
@@ -428,11 +708,22 @@ namespace management
          * @param map The SubsystemMap used to coordinate subsystems
          * @param parents A list of parent subsystems
          */
-        ThreadedSubsystem(std::string const & name,
-                          SubsystemMap & map,
-                          SubsystemParentsList parents);
+        ThreadedSubsystem(std::string const & name, SubsystemMap & map, SubsystemParentsList parents) :
+            Subsystem<Ts...>(name, map, parents)
+        {
+            m_thread = std::thread{[this] ()
+                {
+                    while(handle_bus_message()) {
+                        std::this_thread::yield();
+                    }
+                }};
+        }
 
-        virtual ~ThreadedSubsystem();
+        virtual ~ThreadedSubsystem()
+        {
+            if (m_thread.joinable())
+                m_thread.join();
+        }
     };
 
 } // end namespace management
