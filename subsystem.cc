@@ -57,7 +57,7 @@ namespace management
     {
         auto item = get(key);
         put(key, std::make_pair(state, item.second));
-        assert(get(key).first == state && __PRETTY_FUNCTION__);
+        assert(get(key).first == state);
     }
 
 #ifndef NDEBUG
