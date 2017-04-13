@@ -8,9 +8,9 @@ using namespace management;
 struct FirstParent : ThreadedSubsystem
 {
 public:
-    FirstParent() :
-        ThreadedSubsystem("FirstParent", {} /* no parents */)
-        { }
+    FirstParent(SubsystemMap & m) :
+        ThreadedSubsystem("FirstParent", m, {} /* no parents */)
+    { }
 
     virtual ~FirstParent() { }
 
@@ -32,8 +32,8 @@ public:
 struct FirstChild : ThreadedSubsystem
 {
 public:
-    FirstChild(SubsystemParentsList parents) :
-        ThreadedSubsystem("FirstChild", parents)
+    FirstChild(SubsystemMap & m, SubsystemParentsList parents) :
+        ThreadedSubsystem("FirstChild", m, parents)
     {
         /* init members */
     }
@@ -63,9 +63,6 @@ public:
     }
 };
 
-std::unique_ptr<FirstParent> parent;
-std::unique_ptr<FirstChild> child;
-
 #define simulate_work(ms) \
     std::this_thread::sleep_for(std::chrono::milliseconds(ms))
 
@@ -73,34 +70,42 @@ int main(void)
 {
     std::fprintf(stderr, "Main thread TID %zu\n", std::hash<std::thread::id>()(std::this_thread::get_id()));
 
-    init_system_state(2);
-    parent = std::make_unique<FirstParent>();
-    child = std::make_unique<FirstChild>(SubsystemParentsList{*parent.get()});
+    SubsystemMap map{};
+    auto parent = std::make_unique<FirstParent>(map);
+    auto child = std::make_unique<FirstChild>(map, SubsystemParentsList{*parent.get()});
 
     simulate_work(500);
 
-    parent->start();
     /* triggers parent.on_start() then child.on_start() */
+    parent->start();
 
-    simulate_work(100);
+    simulate_work(200);
 
-    parent->error();
+#ifndef NDEBUG
+    std::cout << std::endl << map << std::endl;
+#endif
+
     /* triggers parent.on_error(), then child.on_error() */
+    parent->error();
 
     simulate_work(100);
 
-    parent->stop();
     /* triggers parent.on_stop(), then child.on_stop() */
+    parent->stop();
 
     simulate_work(100);
 
-    parent->destroy();
     /* triggers parent.on_destroy(), then child.on_destroy() */
+    parent->destroy();
 
     simulate_work(100);
 
     parent.reset();
     child.reset();
+
+#ifndef NDEBUG
+    std::cout << std::endl << map << std::endl;
+#endif
 
     return 0;
 }

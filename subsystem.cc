@@ -3,207 +3,97 @@
  * @author Anthony Clark <clark.anthony.g@gmail.com>
  */
 
-#include <memory>
-#include <string>
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <memory>
 #include <mutex>
+
+#ifndef NDEBUG
+#include <iostream>
+#endif
 
 #include "subsystem.hh"
 
-#ifndef NDEBUG
-#define ALLOW_DEBUG_PRINT
-//#define ALLOW_DEBUG2_PRINT
-
-#include <cstdio>
-std::mutex debug_print_lock;
-
-#if defined(ALLOW_DEBUG_PRINT)
-#define DEBUG_PRINT(x, ...)                                                                                       \
-    do {                                                                                                          \
-        std::lock_guard<decltype(debug_print_lock)> lk{debug_print_lock};                                         \
-        std::fprintf(stderr, "\x1b[1m(%s:%d (tid:%-25zu), %-25s)\x1b[0m\x1b[1m\x1b[34m (%-15s) DEBUG:\x1b[0m " x, \
-                    __FILE__, __LINE__, std::hash<std::thread::id>()(std::this_thread::get_id()),                 \
-                    __func__, m_name.c_str(), ##__VA_ARGS__);                                                     \
-    } while(0)
-#else
-#define DEBUG_PRINT(x, ...) ((void)0)
-#endif
-
-#if defined(ALLOW_DEBUG2_PRINT)
-#define DEBUG_PRINT2(x, ...)                                                                                       \
-    do {                                                                                                           \
-        std::lock_guard<decltype(debug_print_lock)> lk{debug_print_lock};                                          \
-        std::fprintf(stderr, "\x1b[1m(%s:%d (tid:%-25zu), %-25s)\x1b[0m\x1b[1m\x1b[31m (%-15s) DEBUG: \x1b[0m " x, \
-                    __FILE__, __LINE__, std::hash<std::thread::id>()(std::this_thread::get_id()),                  \
-                    __func__, m_name.c_str(), ##__VA_ARGS__);                                                      \
-    } while(0)
-#else
-#define DEBUG_PRINT2(x, ...) ((void)0)
-#endif
-
-#else
-#ifndef DEBUG_PRINT
-#define DEBUG_PRINT(x, ...) ((void)0)
-#endif
-#ifndef DEBUG_PRINT2
-#define DEBUG_PRINT2(x, ...) ((void)0)
-#endif
-#endif
-
-#if 0
-#define D() DEBUG_PRINT2("\n")
-#define DD(x) DEBUG_PRINT2("%s\n", x)
-#else
-#define D() ((void)0)
-#define DD(x) ((void)0)
-#endif
-
 namespace management
 {
-
-    ThreadsafeQueue<std::string> & get_log_queue()
+    SubsystemMap::SubsystemMap(std::uint32_t max_subsystems) noexcept :
+        m_max_subsystems(max_subsystems)
     {
-        static ThreadsafeQueue<std::string> ret;
+        m_map = subsystem_map_type{};
+        m_map.reserve(m_max_subsystems);
+    }
+
+    SubsystemMap::~SubsystemMap()
+    {
+        pthread_rwlock_destroy(&m_state_lock);
+    }
+
+    SubsystemMap::value_type SubsystemMap::get(SubsystemMap::key_type key)
+    {
+        pthread_rwlock_rdlock(&m_state_lock);
+        SubsystemMap::value_type ret = m_map.at(key);
+        pthread_rwlock_unlock(&m_state_lock);
         return ret;
     }
 
-    namespace detail
+    void SubsystemMap::put(SubsystemMap::key_type key, SubsystemMap::value_type value)
     {
-        std::once_flag system_state_init_flag;
-
-        /**< System state instance.
-         * Created in init_system_state() */
-        std::unique_ptr<detail::SubsystemMap> system_state;
-
-        state_map_t & create_or_get_state_map()
-        {
-            static state_map_t map;
-            return map;
-        }
-
-        SubsystemMap::SubsystemMap(std::uint32_t max_subsystems) noexcept :
-            m_max_subsystems(max_subsystems),
-            map_ref(create_or_get_state_map())
-        {
-            map_ref.reserve(m_max_subsystems);
-        }
-
-        SubsystemMap::~SubsystemMap()
-        {
-            pthread_rwlock_destroy(&m_state_lock);
-        }
-
-        SubsystemMap::value_type SubsystemMap::get(SubsystemMap::key_type key)
-        {
-            pthread_rwlock_rdlock(&m_state_lock);
-            SubsystemMap::value_type ret = map_ref.at(key);
-            pthread_rwlock_unlock(&m_state_lock);
-            return ret;
-        }
-
-        void SubsystemMap::put(SubsystemMap::key_type key, SubsystemMap::value_type value)
-        {
-            pthread_rwlock_wrlock(&m_state_lock);
-            map_ref.erase(key);
-            map_ref.emplace(key, value);
-            pthread_rwlock_unlock(&m_state_lock);
-        }
-
-        void SubsystemMap::put(SubsystemMap::key_type key, SubsystemMap::value_type::second_type::type & ss)
-        {
-            assert(map_ref.size() >= m_max_subsystems && "Attempting to exceed max number of subsystems");
-            auto item = get(key);
-            item.second = std::ref(ss);
-            put(key, std::make_pair(item.first, item.second));
-        }
-
-        void SubsystemMap::put(SubsystemMap::key_type key, State state)
-        {
-            auto item = get(key);
-            put(key, std::make_pair(state, item.second));
-            assert(get(key).first == state && __PRETTY_FUNCTION__);
-        }
-
-        SubsystemMap & get_system_state()
-        {
-            assert(system_state && "System state not initialized. Call init_system_state(n) before starting subsystems");
-            return *(system_state.get());
-        }
-
-    } /* end namespace detail */
-
-#ifndef NDEBUG
-        constexpr const char * StateNameStrings[] = {
-            [INIT]    = "INIT\0",
-            [RUNNING] = "RUNNING\0",
-            [STOPPED] = "STOPPED\0",
-            [ERROR]   = "ERROR\0",
-            [DESTROY]  = "DESTROY\0",
-        };
-
-        constexpr const char * StateIPCNameStrings[] = {
-            [Subsystem::SubsystemIPC::PARENT] = "PARENT\0",
-            [Subsystem::SubsystemIPC::CHILD] = "CHILD\0",
-            [Subsystem::SubsystemIPC::SELF] = "SELF\0"
-        };
-
-        void print_system_state()
-        {
-            std::lock_guard<decltype(debug_print_lock)> lk{debug_print_lock};
-            auto & p = *detail::system_state.get();
-
-            for (auto & pair : p.map_ref)
-                std::printf("Entry -------\n"
-                            " KEY   : 0x%08x\n"
-                            " STATE : %s\n"
-                            "  NAME : %s\n",
-                            pair.first,
-                            StateNameStrings[pair.second.first],
-                            pair.second.second.get().get_name().c_str());
-        }
-#else
-        inline void print_system_state(const char * caller) { (void) caller; }
-#endif
-
-#ifndef NDEBUG
-    void Subsystem::print_ipc(std::string s, Subsystem::SubsystemIPC const & ipc)
-    {
-        auto & p = detail::get_system_state();
-        (void)p;
-        (void)s;
-        (void)ipc;
-
-        DEBUG_PRINT("(%s) SubsystemIPC: from:%s, tag:%s, state:%s\n",
-                    s.c_str(), StateIPCNameStrings[ipc.from],
-                    p.get(ipc.tag).second.get().get_name().c_str(),
-                    StateNameStrings[ipc.state]);
+        pthread_rwlock_wrlock(&m_state_lock);
+        m_map.erase(key);
+        m_map.emplace(key, value);
+        pthread_rwlock_unlock(&m_state_lock);
     }
-#else
-    void Subsystem::print_ipc(std::string s, Subsystem::SubsystemIPC const & ipc)
+
+    void SubsystemMap::put(SubsystemMap::key_type key, SubsystemMap::value_type::second_type::type & ss)
     {
-        (void)s ; (void)ipc;
+        assert(m_map.size() >= m_max_subsystems && "Attempting to exceed max number of subsystems");
+        auto item = get(key);
+        item.second = std::ref(ss);
+        put(key, std::make_pair(item.first, item.second));
+    }
+
+    void SubsystemMap::put(SubsystemMap::key_type key, SubsystemState state)
+    {
+        auto item = get(key);
+        put(key, std::make_pair(state, item.second));
+        assert(get(key).first == state && __PRETTY_FUNCTION__);
+    }
+
+#ifndef NDEBUG
+    std::mutex debug_print_lock;
+
+    constexpr const char * StateNameStrings[] = {
+        "INIT\0",
+        "RUNNING\0",
+        "STOPPED\0",
+        "ERROR\0",
+        "DESTROY\0",
+    };
+
+    std::ostream & operator<< (std::ostream & str, SubsystemMap const & m)
+    {
+        std::lock_guard<decltype(debug_print_lock)> lk{debug_print_lock};
+
+        for (auto & pair : m.m_map)
+        {
+            str << "SubsystemMap Entry -------\n"
+                << " KEY   : " << std::to_string(pair.first) << std::endl
+                << " STATE : " << StateNameStrings[static_cast<int>(pair.second.first)] << std::endl
+                << "  NAME : " << pair.second.second.get().get_name().c_str() << std::endl;
+        }
+
+        return str;
     }
 #endif
 
-    void init_system_state(std::uint32_t n)
-    {
-        std::call_once(detail::system_state_init_flag,
-                       [&n]() {
-                           detail::system_state = std::make_unique<detail::SubsystemMap>(n);
-                       });
-    }
-
-    Subsystem::Subsystem(std::string const & name, SubsystemParentsList parents) :
+    Subsystem::Subsystem(std::string const & name, SubsystemMap & map, SubsystemParentsList parents) :
         m_cancel_flag(false),
         m_name(name),
-        m_state(State::INIT),
-        m_sysstate_ref(detail::get_system_state())
+        m_state(SubsystemState::INIT),
+        m_subsystem_map_ref(map)
     {
         m_tag = Subsystem::generate_tag();
-
-        DEBUG_PRINT("Creating '%s' Subsystem with tag %08x\n",
-                    m_name.c_str(), m_tag);
 
         /* Create a map of parents */
         for (auto & parent_item : parents)
@@ -214,11 +104,7 @@ namespace management
             parent_item.get().add_child(*this);
         }
 
-        m_sysstate_ref.put(m_tag, {m_state, std::ref(*this)});
-    }
-
-    Subsystem::~Subsystem()
-    {
+        m_subsystem_map_ref.put(m_tag, {m_state, std::ref(*this)});
     }
 
     SubsystemTag Subsystem::generate_tag()
@@ -228,14 +114,13 @@ namespace management
 
         std::lock_guard<decltype(tag_lock)> lk{tag_lock};
 
-        return (0x55000000 | current++);
+        return (0x55000000 | ++current);
     }
 
     void Subsystem::stop_bus()
     {
         while(auto trash = m_bus.try_pop()) {
-            DEBUG_PRINT2("... throwing away - %s\n",
-                         StateNameStrings[trash->state]);
+            /* ignore things here */
         }
 
         m_bus.terminate();
@@ -247,11 +132,10 @@ namespace management
     {
         bool ret = false;
 
-        /* in the case of no parents, this condition is true */
         if (!has_parents()) {
             ret = true;
         }
-        else if (m_state == DESTROY) {
+        else if (m_state == SubsystemState::DESTROY) {
             ret = true;
         }
         else {
@@ -270,9 +154,9 @@ namespace management
                  */
                 ret = std::all_of(m_parents.begin(), m_parents.end(),
                                   [this] (parent_mapping_t const & p) {
-                                      auto item = m_sysstate_ref.get(p);
+                                      auto item = m_subsystem_map_ref.get(p);
                                       auto s = item.first;
-                                      return (s == RUNNING || s == DESTROY);
+                                      return (s == SubsystemState::RUNNING || s == SubsystemState::DESTROY);
                                   });
             }
         }
@@ -295,14 +179,9 @@ namespace management
         auto k = child.get_tag();
 
         /* Subsystem already contains child */
-        if (m_children.count(k))
-        {
-            DEBUG_PRINT("Subsystem already has the %s Subsystem as a child. Skipping\n",
-                        child.get_name().c_str());
+        if (m_children.count(k)) {
             return;
         }
-
-        DEBUG_PRINT("Inserting Child 0x%08x\n", k);
 
         m_children.insert(k);
     }
@@ -311,10 +190,7 @@ namespace management
     {
         std::lock_guard<lock_t> lk{m_state_change_mutex};
 
-        if (!m_children.count(tag))
-        {
-            DEBUG_PRINT("Subsystem does not contain child subsystem %s. Skipping\n",
-                        StateNameStrings[tag]);
+        if (!m_children.count(tag)) {
             return;
         }
 
@@ -325,10 +201,7 @@ namespace management
     {
         std::lock_guard<lock_t> lk{m_state_change_mutex};
 
-        if (!m_parents.count(tag))
-        {
-            DEBUG_PRINT("Subsystem does not contain parent subsystem %s. Skipping\n",
-                        StateNameStrings[tag]);
+        if (!m_parents.count(tag)) {
             return;
         }
 
@@ -341,55 +214,32 @@ namespace management
 
         auto k = parent.get_tag();
 
-        if (m_parents.count(k))
-        {
-            DEBUG_PRINT("Subsystem already has the %s Subsystem as a parent. Skipping\n",
-                        parent.get_name().c_str());
+        if (m_parents.count(k)) {
             return;
         }
-
-        DEBUG_PRINT("Inserting Parent 0x%08x\n", k);
 
         m_parents.insert(k);
     }
 
-    void Subsystem::commit_state(State new_state)
+    void Subsystem::commit_state(SubsystemState new_state)
     {
-        /* move to function... */
-        static auto test_fn = [this] (State old_state, State new_state) -> bool {
-            /* To account for user error and old messages */
-            if (old_state == new_state) {
-                DEBUG_PRINT("Would commit previous state (%s), skipping...\n",
-                            StateNameStrings[new_state]);
-                return false;
-            }
-            /* prevent resurrection and stale messages */
-            else if (old_state == DESTROY) {
-                DEBUG_PRINT("Current state is DESTROY, ignoring %s\n",
-                            StateNameStrings[new_state]);
-                return false;
-            }
-
-            return true;
-        };
-
-        /* test early to avoid blocking if possible */
-        if (!test_fn(m_state, new_state))
+        if ((m_state == new_state) ||
+            (m_state == SubsystemState::DESTROY))
+        {
             return;
+        }
 
         /* wait for a start signal */
         std::unique_lock<lock_t> lk{m_state_change_mutex};
 
         /* spurious wakeup prevention */
-        while (!wait_for_parents())
+        while (!wait_for_parents()) {
             m_proceed_signal.wait(lk, [this] { return wait_for_parents(); });
-
-        DEBUG_PRINT("Subsystem changed state %s->%s\n",
-                    StateNameStrings[m_state], StateNameStrings[new_state]);
+        }
 
         /* do the actual state change */
         m_state = new_state;
-        m_sysstate_ref.put(m_tag, m_state);
+        m_subsystem_map_ref.put(m_tag, m_state);
 
         for_all_active_parents([this] (Subsystem & p) {
                                     p.put_message({SubsystemIPC::CHILD, m_tag, m_state});
@@ -406,7 +256,6 @@ namespace management
 
         /* detect termination */
         if (item == decltype(m_bus)::terminator()) {
-            DEBUG_PRINT2("%s GOT BUS TERMINATOR\n", m_name.c_str());
             /* notify the last waiting state or external waiters */
             m_proceed_signal.notify_one();
             return false;
@@ -414,12 +263,12 @@ namespace management
 
         switch(item->from)
         {
-        case SubsystemIPC::PARENT : handle_parent_event(*item.get()); break;
-        case SubsystemIPC::CHILD  : handle_child_event(*item.get()); break;
-        case SubsystemIPC::SELF   : handle_self_event(*item.get()); break;
+        case SubsystemIPC::PARENT: handle_parent_event(*item.get()); break;
+        case SubsystemIPC::CHILD: handle_child_event(*item.get()); break;
+        case SubsystemIPC::SELF: handle_self_event(*item.get()); break;
         /* TODO exception */
         default :
-            DEBUG_PRINT("Handling bus message with improper `from` field\n");
+            return true;
         }
 
         /* notify the last waiting state or external waihers */
@@ -437,13 +286,12 @@ namespace management
     {
         switch(event.state)
         {
-        case DESTROY: remove_child(event.tag); break;
-        case INIT:
-        case RUNNING:
-        case STOPPED:
-        case ERROR: break;
+        case SubsystemState::DESTROY: remove_child(event.tag); break;
+        case SubsystemState::INIT:
+        case SubsystemState::RUNNING:
+        case SubsystemState::STOPPED:
+        case SubsystemState::ERROR: break;
         default:
-            DEBUG_PRINT("Handling BUS message with improper `state` field\n");
             return;
         }
 
@@ -461,13 +309,12 @@ namespace management
         /* handle cancellation flag */
         switch(event.state)
         {
-        case INIT:
-        case RUNNING:
-        case ERROR: break;
-        case STOPPED: break;
-        case DESTROY: set_cancel_flag(true); remove_parent(event.tag); break;
+        case SubsystemState::INIT:
+        case SubsystemState::RUNNING:
+        case SubsystemState::ERROR: break;
+        case SubsystemState::STOPPED: break;
+        case SubsystemState::DESTROY: set_cancel_flag(true); remove_parent(event.tag); break;
         default:
-            DEBUG_PRINT("Handling BUS message with improper `state` field\n");
             return;
         }
 
@@ -480,13 +327,13 @@ namespace management
         /* handle cancellation flag */
         switch(event.state)
         {
-        case RUNNING:
+        case SubsystemState::RUNNING:
             on_start(); break;
-        case ERROR:
+        case SubsystemState::ERROR:
             on_error(); break;
-        case STOPPED:
+        case SubsystemState::STOPPED:
             on_stop(); break;
-        case DESTROY:
+        case SubsystemState::DESTROY:
             {
                 set_cancel_flag(true);
                 on_destroy();
@@ -494,7 +341,6 @@ namespace management
                 break;
             }
         default:
-            DEBUG_PRINT("Handling BUS message with improper `state` field\n");
             return;
         }
 
@@ -505,34 +351,34 @@ namespace management
     {
         switch(event.state)
         {
-        case ERROR: error(); break;
-        case DESTROY: destroy(); break;
-        case STOPPED: stop(); break;
-        case RUNNING: start(); break;
-        case INIT:
+        case SubsystemState::ERROR: error(); break;
+        case SubsystemState::DESTROY: destroy(); break;
+        case SubsystemState::STOPPED: stop(); break;
+        case SubsystemState::RUNNING: start(); break;
+        case SubsystemState::INIT:
         default:
             break;
         }
     }
 
     void Subsystem::start() {
-        put_message({SubsystemIPC::SELF, m_tag, RUNNING});
+        put_message({SubsystemIPC::SELF, m_tag, SubsystemState::RUNNING});
     }
 
     void Subsystem::stop() {
-        put_message({SubsystemIPC::SELF, m_tag, STOPPED});
+        put_message({SubsystemIPC::SELF, m_tag, SubsystemState::STOPPED});
     }
 
     void Subsystem::error() {
-        put_message({SubsystemIPC::SELF, m_tag, ERROR});
+        put_message({SubsystemIPC::SELF, m_tag, SubsystemState::ERROR});
     }
 
     void Subsystem::destroy() {
-        put_message({SubsystemIPC::SELF, m_tag, DESTROY});
+        put_message({SubsystemIPC::SELF, m_tag, SubsystemState::DESTROY});
     }
 
-    ThreadedSubsystem::ThreadedSubsystem(std::string const & name, SubsystemParentsList parents) :
-        Subsystem(name, parents)
+    ThreadedSubsystem::ThreadedSubsystem(std::string const & name, SubsystemMap & map, SubsystemParentsList parents) :
+        Subsystem(name, map, parents)
     {
         m_thread = std::thread{[this] ()
         {
@@ -545,7 +391,6 @@ namespace management
     ThreadedSubsystem::~ThreadedSubsystem()
     {
         m_thread.join();
-        DEBUG_PRINT("Done with thread\n");
     }
 
 } // end namespace management

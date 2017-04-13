@@ -6,6 +6,7 @@
 
 #include <thread>
 #include <iostream>
+#include <cassert>
 
 #include "subsystem.hh"
 
@@ -16,8 +17,8 @@ using namespace management;
 
 struct Os_Subsystem : ThreadedSubsystem
 {
-    Os_Subsystem() :
-        ThreadedSubsystem("OS", {})
+    Os_Subsystem(SubsystemMap & m) :
+        ThreadedSubsystem("OS", m, {})
     {
         SIM_MS(300);
     }
@@ -33,8 +34,8 @@ struct Os_Subsystem : ThreadedSubsystem
 
 struct Foo_Subsystem : ThreadedSubsystem
 {
-    explicit Foo_Subsystem(SubsystemParentsList parents) :
-        ThreadedSubsystem("FOO", parents)
+    explicit Foo_Subsystem(SubsystemMap & m, SubsystemParentsList parents) :
+        ThreadedSubsystem("FOO", m, parents)
     { }
 
     void on_error() override {
@@ -44,8 +45,8 @@ struct Foo_Subsystem : ThreadedSubsystem
 
 struct Bar_Subsystem : ThreadedSubsystem
 {
-    explicit Bar_Subsystem(SubsystemParentsList parents) :
-       ThreadedSubsystem("BAR", parents)
+    explicit Bar_Subsystem(SubsystemMap &m, SubsystemParentsList parents) :
+       ThreadedSubsystem("BAR", m, parents)
     { }
 
     void on_error() override {
@@ -53,20 +54,24 @@ struct Bar_Subsystem : ThreadedSubsystem
     }
 };
 
-
-void regular_test()
+int main()
 {
-    std::cout << "regular_test: " << std::hash<std::thread::id>()(std::this_thread::get_id()) << std::endl;
+    std::cout << "Main thread TID: " << std::hash<std::thread::id>()(std::this_thread::get_id()) << std::endl;
 
     // create
-    Os_Subsystem os;
-    Foo_Subsystem foo{os};
-    Bar_Subsystem bar{os};
+    SubsystemMap map{};
+    Os_Subsystem os{map};
+    Foo_Subsystem foo{map, SubsystemParentsList{os}};
+    Bar_Subsystem bar{map, SubsystemParentsList{os}};
+
+#ifndef NDEBUG
+    std::cout << std::endl << map << std::endl;
+#endif
 
     os.start();
     SIM_S(1);
 
-    assert(foo.get_state() == RUNNING);
+    assert(foo.get_state() == SubsystemState::RUNNING);
     std::printf(">> ALL SUBSYSTEMS STARTED\n");
 
     SIM_MS(100);
@@ -92,11 +97,9 @@ void regular_test()
     std::printf(">> Destroying Bar\n");
     bar.destroy();
     SIM_MS(100);
-}
 
-int main()
-{
-    init_system_state(sizes::default_max_subsystem_count);
-    regular_test();
+#ifndef NDEBUG
+    std::cout << std::endl << map << std::endl;
+#endif
 }
 

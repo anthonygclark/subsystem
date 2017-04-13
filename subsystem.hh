@@ -6,15 +6,12 @@
  * @author Anthony Clark <clark.anthony.g@gmail.com>
  */
 
-#include <algorithm>
 #include <atomic>
-#include <cassert>
 #include <condition_variable>
-#include <cstdint>
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
-#include <memory>
+#include <iosfwd>
 #include <mutex>
 #include <set>
 #include <string>
@@ -35,113 +32,100 @@ namespace management
 {
     /* forward */
     class Subsystem;
-    /* forward */
-    class ThreadedSubsystem;
 
-    enum State { INIT, RUNNING , STOPPED , ERROR , DESTROY };
+    /**
+     * \enum Subsystem state
+     */
+    enum class SubsystemState : std::uint8_t
+    {
+        INIT = 0, RUNNING , STOPPED , ERROR , DESTROY
+    };
 
     using SubsystemTag = std::uint32_t;
+
+    /* Convenience alias */
     using SubsystemParentsList = std::initializer_list<std::reference_wrapper<Subsystem>>;
 
-    void init_system_state(std::uint32_t n);
-
-#ifndef NDEBUG
-    void print_system_state();
-#endif
-
-    ThreadsafeQueue<std::string> & get_log_queue();
-
-    namespace detail
-    {
-        using state_map_t = std::unordered_map
-            <
-                SubsystemTag,
-                std::pair<State, std::reference_wrapper<Subsystem>>,
-                std::hash<SubsystemTag>
-            >;
-
-        /**
-         * @brief Accessor for the state map
-         * @return A reference to the state map
-         */
-        state_map_t & create_or_get_state_map();
-
-        /**
-         * @brief Basic proxy access to the shared state of all subsystems.
-         * @details Having a 'global' map of subsystems complicates access, but reduces
-         *          complexity of the subsystem class.
-         */
-        struct SubsystemMap final
-        {
-            /* alias */
-            using key_type = state_map_t::key_type;
-            using value_type = state_map_t::mapped_type;
-
-            /**< Max number of subsystems */
-            std::uint32_t m_max_subsystems;
-
-            /**< RW lock for controlling access to the state map
-             * (initialized via NSDMI). This is specific to glibc and maybe
-             */
-            pthread_rwlock_t m_state_lock =
-                PTHREAD_RWLOCK_WRITER_NONRECURSIVE_INITIALIZER_NP;
-
-            /**< Managed state map */
-            state_map_t & map_ref;
-
-            /**
-             * @brief Binding constructor
-             */
-            explicit SubsystemMap(std::uint32_t max_subsystems = sizes::default_max_subsystem_count) noexcept;
-
-            /**
-             * @brief Destructor
-             */
-            ~SubsystemMap();
-
-            /**
-             * @brief Proxy for retrieving an item from the map.
-             * @details Note, this is a value type as we don't want to hold references
-             * @param key The lookup
-             */
-             value_type get(key_type key);
-
-            /**
-             * @brief Proxy for insertion into the map via .insert
-             * @param key The tag to update
-             * @param value The new value
-             */
-            void put(key_type key, value_type value);
-
-            /**
-             * @brief Proxy for insertion into an existing entry
-             * @details This updates the subsystem's pointer value
-             * @param key The tag to update
-             * @param item The new pointer value
-             */
-            void put(key_type key, value_type::second_type::type & item);
-
-            /**
-             * @brief Proxy for insertion into an existing entry
-             * @details This updates the found subsystem's state
-             * @param key The tag to update
-             * @param state The new state
-             */
-            void put(key_type key, State state);
-        };
-
-
-        /**
-         * @brief Creates and/or retrieves a reference to a global/statically allocated
-         *      SubsystemMap object. TODO There should allowed to be more than one system
-         *      state.
-         */
-        SubsystemMap & get_system_state();
-    }
+    using subsystem_map_type = std::unordered_map<
+        SubsystemTag,
+        std::pair<SubsystemState, std::reference_wrapper<Subsystem>>, std::hash<SubsystemTag>
+    >;
 
     /**< Alias/typedef for the systemstate bus */
     template<typename M>
         using SubsystemBus = ThreadsafeQueue<M>;
+
+    /**
+     * @brief Basic proxy access to the shared state of all subsystems.
+     * @details Having a 'global' map of subsystems complicates access, but reduces
+     *          complexity of the subsystem class.
+     */
+    class SubsystemMap final
+    {
+    public:
+        /* alias */
+        using key_type = subsystem_map_type::key_type;
+        using value_type = subsystem_map_type::mapped_type;
+
+    private:
+        /**< Max number of subsystems */
+        std::uint32_t m_max_subsystems;
+
+        /**< RW lock for controlling access to the state map
+         * (initialized via NSDMI). This is specific to libstdc++
+         * and maybe libc++
+         */
+        pthread_rwlock_t m_state_lock =
+            PTHREAD_RWLOCK_WRITER_NONRECURSIVE_INITIALIZER_NP;
+
+        /**< Managed state map */
+        subsystem_map_type m_map;
+
+    public:
+        /**
+         * @brief Binding constructor
+         */
+        explicit SubsystemMap(std::uint32_t max_subsystems = sizes::default_max_subsystem_count) noexcept;
+
+        /**
+         * @brief Destructor
+         */
+        ~SubsystemMap();
+
+        /**
+         * @brief Proxy for retrieving an item from the map.
+         * @details Note, this is a value type as we don't want to hold references
+         * @param key The lookup
+         */
+        value_type get(key_type key);
+
+        /**
+         * @brief Proxy for insertion into the map via .insert
+         * @param key The tag to update
+         * @param value The new value
+         */
+        void put(key_type key, value_type value);
+
+        /**
+         * @brief Proxy for insertion into an existing entry
+         * @details This updates the subsystem's pointer value
+         * @param key The tag to update
+         * @param item The new pointer value
+         */
+        void put(key_type key, value_type::second_type::type & item);
+
+        /**
+         * @brief Proxy for insertion into an existing entry
+         * @details This updates the found subsystem's state
+         * @param key The tag to update
+         * @param state The new state
+         */
+        void put(key_type key, SubsystemState state);
+
+#ifndef NDEBUG
+        friend std::ostream & operator<< (std::ostream & s, SubsystemMap const & m);
+#endif
+    };
 
     /**
      * @brief Subsystem
@@ -157,7 +141,7 @@ namespace management
         {
             enum { PARENT, CHILD, SELF } from; /**< originator */
             SubsystemTag tag; /**< The tag of the originator */
-            State state; /**< The new state of the originator */
+            SubsystemState state; /**< The new state of the originator */
         };
 
     protected:
@@ -181,18 +165,15 @@ namespace management
         /**< The name of the subsystem */
         std::string m_name;
         /**< The current subsystem state */
-        State m_state;
+        SubsystemState m_state;
         /**< The subsystems tag */
         SubsystemTag m_tag;
         /**< The communication bus between subsystems */
         SubsystemBus<SubsystemIPC> m_bus;
         /**< The reference to the managing systemstate */
-        detail::SubsystemMap & m_sysstate_ref;
+        SubsystemMap & m_subsystem_map_ref;
         /**< State change signal */
         std::condition_variable m_proceed_signal;
-
-    private:
-        void print_ipc(std::string s, Subsystem::SubsystemIPC const & ipc);
 
     private:
         /**
@@ -255,11 +236,11 @@ namespace management
             {
                 for (auto & p : m_parents)
                 {
-                    auto target = m_sysstate_ref.get(p);
+                    auto target = m_subsystem_map_ref.get(p);
                     auto & state = target.first;
                     auto & subsys = target.second;
 
-                    if (state == RUNNING)
+                    if (state == SubsystemState::RUNNING)
                         runnable(subsys);
                 }
             }
@@ -274,11 +255,11 @@ namespace management
             {
                 for (auto & c : m_children)
                 {
-                    auto target = m_sysstate_ref.get(c);
+                    auto target = m_subsystem_map_ref.get(c);
                     auto & state = target.first;
                     auto & subsys = target.second;
 
-                    if (state != DESTROY)
+                    if (state != SubsystemState::DESTROY)
                         runnable(subsys);
                 }
             }
@@ -301,19 +282,40 @@ namespace management
          */
         void handle_self_event(SubsystemIPC event);
 
+        /**
+         * @brief Sets the cancellation flag.
+         * @details This bypasses any wait state the subsystem is in
+         * @param b The flag value to set
+         */
+        void set_cancel_flag(bool b);
+
+        /**
+         * @brief Commits the state to the subsystem table
+         */
+        void commit_state(SubsystemState state);
+
+        /**
+         * @brief Stops the event bus
+         */
+        void stop_bus();
+
     protected:
         /**
          * @brief Constructor
          * @param name The name of the subsystem
-         * @param tag The tag of the subsystem
+         * @param map The SubsystemMap coordinating this subsystem
          * @param parents A list of parent subsystems
          */
-        explicit Subsystem(std::string const & name, SubsystemParentsList parents);
+        Subsystem(std::string const & name,
+                  SubsystemMap & m,
+                  SubsystemParentsList parents);
+
+        Subsystem(Subsystem const &) = delete;
 
         /**
          * @brief Destructor
          */
-        virtual ~Subsystem();
+        virtual ~Subsystem() = default;
 
         /**
          * @brief Custom Start function
@@ -357,23 +359,6 @@ namespace management
          *          about the child subsystem
          */
         virtual void on_child(SubsystemIPC event);
-
-        /**
-         * @brief Sets the cancellation flag.
-         * @details This bypasses any wait state the subsystem is in
-         * @param b The flag value to set
-         */
-        void set_cancel_flag(bool b);
-
-        /**
-         * @brief Commits the state to the subsystem table
-         */
-        void commit_state(State state);
-
-        /**
-         * @brief Stops the event bus
-         */
-        void stop_bus();
 
     public:
         /**
@@ -420,13 +405,15 @@ namespace management
         /**
          * @return The subsystem's current state
          */
-        State get_state() const {
+        SubsystemState get_state() const {
             return m_state;
         }
     };
 
     /**
-     * @brief Subsystem with a managed thread
+     * @brief Subsystem with a managed thread to handle bus messages
+     * @details This is useful if you want the subsystem to execute start/stop/error/destroy
+     *          in its own thread. Usually this is desired.
      */
     class ThreadedSubsystem : public Subsystem
     {
@@ -438,10 +425,12 @@ namespace management
         /**
          * @brief Constructor
          * @param name The name of the subsystem
-         * @param tag The tag of the subsystem
+         * @param map The SubsystemMap used to coordinate subsystems
          * @param parents A list of parent subsystems
          */
-        ThreadedSubsystem(std::string const & name, SubsystemParentsList parents);
+        ThreadedSubsystem(std::string const & name,
+                          SubsystemMap & map,
+                          SubsystemParentsList parents);
 
         virtual ~ThreadedSubsystem();
     };
