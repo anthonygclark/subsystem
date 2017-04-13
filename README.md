@@ -17,9 +17,9 @@ using namespace management;
 struct FirstParent : ThreadedSubsystem
 {
 public:
-    FirstParent() :
-        ThreadedSubsystem("FirstParent", {} /* no parents */)
-        { }
+    FirstParent(SubsystemMap & m) :
+        ThreadedSubsystem("FirstParent", m, {} /* no parents */)
+    { }
 
     virtual ~FirstParent() { }
 
@@ -41,8 +41,8 @@ public:
 struct FirstChild : ThreadedSubsystem
 {
 public:
-    FirstChild(SubsystemParentsList parents) :
-        ThreadedSubsystem("FirstChild", parents)
+    FirstChild(SubsystemMap & m, SubsystemParentsList parents) :
+        ThreadedSubsystem("FirstChild", m, parents)
     {
         /* init members */
     }
@@ -72,9 +72,6 @@ public:
     }
 };
 
-std::unique_ptr<FirstParent> parent;
-std::unique_ptr<FirstChild> child;
-
 #define simulate_work(ms) \
     std::this_thread::sleep_for(std::chrono::milliseconds(ms))
 
@@ -82,79 +79,91 @@ int main(void)
 {
     std::fprintf(stderr, "Main thread TID %zu\n", std::hash<std::thread::id>()(std::this_thread::get_id()));
 
-    init_system_state(2);
-    parent = std::make_unique<FirstParent>();
-    child = std::make_unique<FirstChild>(SubsystemParentsList{*parent.get()});
+    SubsystemMap map{};
+    auto parent = std::make_unique<FirstParent>(map);
+    auto child = std::make_unique<FirstChild>(map, SubsystemParentsList{*parent.get()});
 
     simulate_work(500);
 
-    parent->start();
     /* triggers parent.on_start() then child.on_start() */
+    parent->start();
 
-    simulate_work(100);
+    simulate_work(200);
 
-    parent->error();
+#ifndef NDEBUG
+    std::cout << std::endl << map << std::endl;
+#endif
+
     /* triggers parent.on_error(), then child.on_error() */
+    parent->error();
 
     simulate_work(100);
 
-    parent->stop();
     /* triggers parent.on_stop(), then child.on_stop() */
+    parent->stop();
 
     simulate_work(100);
 
-    parent->destroy();
     /* triggers parent.on_destroy(), then child.on_destroy() */
+    parent->destroy();
 
     simulate_work(100);
 
     parent.reset();
     child.reset();
 
+#ifndef NDEBUG
+    std::cout << std::endl << map << std::endl;
+#endif
+  
     return 0;
 }
+
 ```
 
 Compiling this with:
 
 ```sh
-clang++ --std=c++14 -Wall -Wextra -Werror simple_test.cc subsystem.cc -ggdb3 -I. -lpthread -lrt
+clang++ --std=c++14 -Wall -Wextra -Werror simple_test.cc subsystem.cc -ggdb3 -I. -lpthread -o simple_test
 ```
 
 Yields the following output:
 
 ```
-Main thread TID 11136472679203368661
-(subsystem.cc:207 (tid:11136472679203368661     ), Subsystem                ) (FirstParent    ) DEBUG: Creating 'FirstParent' Subsystem with tag 55000000
-(subsystem.cc:207 (tid:11136472679203368661     ), Subsystem                ) (FirstChild     ) DEBUG: Creating 'FirstChild' Subsystem with tag 55000001
-(subsystem.cc:352 (tid:11136472679203368661     ), add_parent               ) (FirstChild     ) DEBUG: Inserting Parent 0x55000000
-(subsystem.cc:306 (tid:11136472679203368661     ), add_child                ) (FirstParent    ) DEBUG: Inserting Child 0x55000001
+Main thread TID 9558670992743276620
 PARENT STARTED
-(subsystem.cc:389 (tid:1283900022735240788      ), commit_state             ) (FirstParent    ) DEBUG: Subsystem changed state INIT->RUNNING
-(subsystem.cc:389 (tid:279770860684962401       ), commit_state             ) (FirstChild     ) DEBUG: Subsystem changed state INIT->RUNNING
+
+SubsystemMap Entry -------
+ KEY   : 1426063362
+ STATE : RUNNING
+  NAME : FirstChild
+SubsystemMap Entry -------
+ KEY   : 1426063361
+ STATE : RUNNING
+  NAME : FirstParent
+
 PARENT ERROR
-(subsystem.cc:389 (tid:1283900022735240788      ), commit_state             ) (FirstParent    ) DEBUG: Subsystem changed state RUNNING->ERROR
 CHILD ERROR
 PARENT STOPPING
-(subsystem.cc:389 (tid:1283900022735240788      ), commit_state             ) (FirstParent    ) DEBUG: Subsystem changed state ERROR->STOPPED
-(subsystem.cc:389 (tid:1283900022735240788      ), commit_state             ) (FirstParent    ) DEBUG: Subsystem changed state STOPPED->DESTROY
-(subsystem.cc:389 (tid:279770860684962401       ), commit_state             ) (FirstChild     ) DEBUG: Subsystem changed state RUNNING->ERROR
 CHILD STOPPING
-(subsystem.cc:389 (tid:279770860684962401       ), commit_state             ) (FirstChild     ) DEBUG: Subsystem changed state ERROR->STOPPED
-(subsystem.cc:389 (tid:279770860684962401       ), commit_state             ) (FirstChild     ) DEBUG: Subsystem changed state STOPPED->DESTROY
-(subsystem.cc:554 (tid:11136472679203368661     ), ~ThreadedSubsystem       ) (FirstParent    ) DEBUG: Done with thread
-(subsystem.cc:554 (tid:11136472679203368661     ), ~ThreadedSubsystem       ) (FirstChild     ) DEBUG: Done with thread
-```
 
-*Sorry about the wrapping, debug is verbose*
+SubsystemMap Entry -------
+ KEY   : 1426063362
+ STATE : DESTROY
+  NAME : FirstChild
+SubsystemMap Entry -------
+ KEY   : 1426063361
+ STATE : DESTROY
+  NAME : FirstParent
+```
 
 
 
 #### TODO
 
-1. Remove need for threads and mutexs. It would be nice to have a version that works with single threaded applications - though this first pass wasn't intended for that.
+1. Remove the need for threading all together so this can be abstracted to use coroutines.
 2. Lower requirement of the STL for containers and prefer fixed sized containers for queues, etc.
-3. Support std::allocators and other abstractions.
+3. Support more type_traits.
 4. Maybe switch ThreadsafeQueue with a priority queue / max heap version.
-5. Remove DEBUG_PRINT in favor of a logging abstraction i.e., `extern void log_message(...)`
-6. Remove namespace-level `SystemState` instance.
+5. Replace pthread_rw_lock with std::shared_mutex or atomics (?)
+6. Allow subclasses to define boost/std::variants to send over the subsystem bus so the bus can act as general IPC between subsystems (and not just for state changes).
