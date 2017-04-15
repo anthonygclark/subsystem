@@ -15,7 +15,7 @@ using namespace management;
 #define SIM_MS(X) std::this_thread::sleep_for(std::chrono::milliseconds(X))
 #define SIM_S(X) std::this_thread::sleep_for(std::chrono::seconds(X))
 
-struct Os_Subsystem : ThreadedSubsystem
+struct Os_Subsystem : DefaultThreadedSubsystem
 {
     Os_Subsystem(SubsystemMap & m) :
         ThreadedSubsystem("OS", m, {})
@@ -32,7 +32,7 @@ struct Os_Subsystem : ThreadedSubsystem
     }
 };
 
-struct Foo_Subsystem : ThreadedSubsystem
+struct Foo_Subsystem : DefaultThreadedSubsystem
 {
     explicit Foo_Subsystem(SubsystemMap & m, SubsystemParentsList parents) :
         ThreadedSubsystem("FOO", m, parents)
@@ -43,7 +43,7 @@ struct Foo_Subsystem : ThreadedSubsystem
     }
 };
 
-struct Bar_Subsystem : ThreadedSubsystem
+struct Bar_Subsystem : DefaultThreadedSubsystem
 {
     explicit Bar_Subsystem(SubsystemMap &m, SubsystemParentsList parents) :
        ThreadedSubsystem("BAR", m, parents)

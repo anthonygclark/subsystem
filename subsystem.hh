@@ -18,6 +18,7 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include <algorithm>
 
 #include <pthread.h>
 
@@ -33,6 +34,8 @@ namespace sizes
 
 namespace management
 {
+    struct SubsystemImpl;
+
     /**
      * \enum Subsystem state
      */
@@ -44,16 +47,27 @@ namespace management
     using SubsystemTag = std::uint32_t;
 
     /* Convenience alias */
-    using SubsystemParentsList = std::initializer_list<std::reference_wrapper<Subsystem>>;
+    using SubsystemParentsList = std::initializer_list<std::reference_wrapper<SubsystemImpl>>;
 
     using subsystem_map_type = std::unordered_map<
         SubsystemTag,
-        std::pair<SubsystemState, std::reference_wrapper<Subsystem>>, std::hash<SubsystemTag>
+        std::pair<SubsystemState, std::reference_wrapper<SubsystemImpl>>, std::hash<SubsystemTag>
     >;
 
     /**< Alias/typedef for the systemstate bus */
     template<typename M>
-        using SubsystemBus = ThreadsafeQueue<M>;
+        using DefaultSubsystemBus = ThreadsafeQueue<M>;
+
+    /**
+     * @brief Simple structure containing primitives to carry state
+     *   changes.
+     */
+    struct SubsystemIPC
+    {
+        enum { PARENT, CHILD, SELF } from; /**< originator */
+        SubsystemTag tag; /**< The tag of the originator */
+        SubsystemState state; /**< The new state of the originator */
+    };
 
     /**
      * @brief Basic proxy access to the shared state of all subsystems.
@@ -127,23 +141,29 @@ namespace management
 #endif
     };
 
+    struct SubsystemImpl {
+        virtual ~SubsystemImpl() = default;
+        virtual void add_child(SubsystemImpl & child) = 0;
+        virtual void add_parent(SubsystemImpl & parent) = 0;
+        virtual void remove_child(SubsystemTag tag) = 0;
+        virtual void remove_parent(SubsystemTag tag) = 0;
+        virtual void put_message(SubsystemIPC msg) = 0;
+
+        SubsystemTag m_tag = 0;
+        std::string m_name;
+
+        SubsystemTag get_tag() const { return m_tag; }
+
+        std::string get_name() const { return m_name; }
+    };
+
     /**
      * @brief Subsystem
      */
-    template<typename Bus>
-    class Subsystem
+    template<typename Bus=DefaultSubsystemBus<SubsystemIPC>>
+        class Subsystem : public SubsystemImpl
     {
     public:
-        /**
-         * @brief Simple structure containing primitives to carry state
-         *   changes.
-         */
-        struct SubsystemIPC
-        {
-            enum { PARENT, CHILD, SELF } from; /**< originator */
-            SubsystemTag tag; /**< The tag of the originator */
-            SubsystemState state; /**< The new state of the originator */
-        };
 
     protected:
         /**< Current parent tags */
@@ -157,18 +177,14 @@ namespace management
         /**< State change lock */
         std::mutex m_state_change_mutex;
         /* alias */
-        using child_mapping_t = decltype(m_children)::value_type;
+        using child_mapping_t = typename decltype(m_children)::value_type;
         /* alias */
-        using parent_mapping_t = decltype(m_parents)::value_type;
+        using parent_mapping_t = typename decltype(m_parents)::value_type;
         /* alias */
         using lock_t = decltype(m_state_change_mutex);
 
-        /**< The name of the subsystem */
-        std::string m_name;
         /**< The current subsystem state */
         SubsystemState m_state;
-        /**< The subsystems tag */
-        SubsystemTag m_tag;
         /**< The communication bus between subsystems */
         Bus m_bus;
         /**< The reference to the managing systemstate */
@@ -194,7 +210,7 @@ namespace management
          * @brief Adds a child to this subsystem
          * @param child The child pointer to add
          */
-        void add_child(Subsystem & child)
+        void add_child(SubsystemImpl & child) override
         {
             /* lock here as this can be called from a child,
              * ie - m_parents->add_child(this) */
@@ -214,7 +230,7 @@ namespace management
          * @brief Adds a parent to this subsystem
          * @param parent The parent pointer to add
          */
-        void add_parent(Subsystem & parent)
+        void add_parent(SubsystemImpl & parent) override
         {
             std::lock_guard<lock_t> lk(m_state_change_mutex);
 
@@ -231,7 +247,7 @@ namespace management
          * @brief Removes a child from this subsystem
          * @param tag The child tag to remove
          */
-        void remove_child(SubsystemTag tag)
+        void remove_child(SubsystemTag tag) override
         {
             std::lock_guard<lock_t> lk{m_state_change_mutex};
 
@@ -246,7 +262,7 @@ namespace management
          * @brief Removes a parent from this subsystem
          * @param tag The parent tag to remove
          */
-        void remove_parent(SubsystemTag tag)
+        void remove_parent(SubsystemTag tag) override
         {
             std::lock_guard<lock_t> lk{m_state_change_mutex};
 
@@ -287,9 +303,9 @@ namespace management
                      */
                     ret = std::all_of(m_parents.begin(), m_parents.end(),
                                       [this] (parent_mapping_t const & p) {
-                                      auto item = m_subsystem_map_ref.get(p);
-                                      auto s = item.first;
-                                      return (s == SubsystemState::RUNNING || s == SubsystemState::DESTROY);
+                                          auto item = m_subsystem_map_ref.get(p);
+                                          auto s = item.first;
+                                          return (s == SubsystemState::RUNNING || s == SubsystemState::DESTROY);
                                       });
                 }
             }
@@ -310,12 +326,11 @@ namespace management
          * @details Intended to be called from other subsystems as IPC
          * @param msg The state-change message to send
          */
-        void put_message(SubsystemIPC msg)
+        void put_message(SubsystemIPC msg) override
         {
             m_bus.push(msg);
             m_proceed_signal.notify_one();
         }
-
 
         /**
          * @brief Launches a runnable for each active parent subsystem
@@ -452,7 +467,7 @@ namespace management
          */
         void commit_state(SubsystemState state)
         {
-            if ((m_state == new_state) ||
+            if ((m_state == state) ||
                 (m_state == SubsystemState::DESTROY))
             {
                 return;
@@ -467,14 +482,14 @@ namespace management
             }
 
             /* do the actual state change */
-            m_state = new_state;
+            m_state = state;
             m_subsystem_map_ref.put(m_tag, m_state);
 
-            for_all_active_parents([this] (Subsystem & p) {
+            for_all_active_parents([this] (SubsystemImpl & p) {
                                    p.put_message({SubsystemIPC::CHILD, m_tag, m_state});
                                    });
 
-            for_all_active_children([this] (Subsystem & c) {
+            for_all_active_children([this] (SubsystemImpl & c) {
                                     c.put_message({SubsystemIPC::PARENT, m_tag, m_state});
                                     });
         }
@@ -501,14 +516,14 @@ namespace management
          * @param parents A list of parent subsystems
          */
         Subsystem(std::string const & name,
-                  SubsystemMap & m,
+                  SubsystemMap & map,
                   SubsystemParentsList parents) :
             m_cancel_flag(false),
-            m_name(name),
             m_state(SubsystemState::INIT),
             m_subsystem_map_ref(map)
         {
             m_tag = Subsystem::generate_tag();
+            m_name = name;
 
             /* Create a map of parents */
             for (auto & parent_item : parents)
@@ -519,7 +534,8 @@ namespace management
                 parent_item.get().add_child(*this);
             }
 
-            m_subsystem_map_ref.put(m_tag, {m_state, std::ref(*this)});
+            m_subsystem_map_ref.put(m_tag,
+                                    {m_state, std::ref(static_cast<SubsystemImpl>(*this))});
         }
 
         Subsystem(Subsystem const &) = delete;
@@ -591,7 +607,7 @@ namespace management
             (void)event;
         }
 
-        virtual bool handle_ipc_message(SubsystemIPC event)
+        bool handle_ipc_message(SubsystemIPC event)
         {
             switch(event.from)
             {
@@ -653,32 +669,18 @@ namespace management
          * @brief Handles a single bus message
          * @return T, if the message was valid; F, if /the terminator was caught
          */
-        virtual bool handle_bus_message()
+        bool handle_bus_message()
         {
             auto item = m_bus.wait_and_pop();
 
             /* detect termination */
-            if (item == decltype(m_bus)::terminator()) {
+            if (item == typename decltype(m_bus)::terminator()) {
                 /* notify the last waiting state or external waiters */
                 m_proceed_signal.notify_one();
                 return false;
             }
 
             handle_ipc_message(*item.get());
-        }
-
-        /**
-         * @return The name of the subsystem
-         */
-        std::string const & get_name() const {
-            return m_name;
-        }
-
-        /**
-         * @return The subsystem tag
-         */
-        SubsystemTag get_tag() const {
-            return m_tag;
         }
 
         /**
@@ -694,8 +696,8 @@ namespace management
      * @details This is useful if you want the subsystem to execute start/stop/error/destroy
      *          in its own thread. Usually this is desired.
      */
-    template<typename... Ts>
-    class ThreadedSubsystem : public Subsystem
+    template<typename Bus=DefaultSubsystemBus<SubsystemIPC>>
+        class ThreadedSubsystem : public Subsystem<Bus>
     {
     private:
         /**< managed thread. Must be joinable */
@@ -709,14 +711,15 @@ namespace management
          * @param parents A list of parent subsystems
          */
         ThreadedSubsystem(std::string const & name, SubsystemMap & map, SubsystemParentsList parents) :
-            Subsystem<Ts...>(name, map, parents)
+            Subsystem<Bus>(name, map, parents)
         {
             m_thread = std::thread{[this] ()
                 {
-                    while(handle_bus_message()) {
+                    while(this->handle_bus_message()) {
                         std::this_thread::yield();
                     }
-                }};
+                }
+            };
         }
 
         virtual ~ThreadedSubsystem()
@@ -725,6 +728,8 @@ namespace management
                 m_thread.join();
         }
     };
+
+    using DefaultThreadedSubsystem = ThreadedSubsystem<DefaultSubsystemBus<SubsystemIPC>>;
 
 } // end namespace management
 
