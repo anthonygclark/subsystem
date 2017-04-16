@@ -34,24 +34,27 @@ namespace sizes
 
 namespace management
 {
-    struct SubsystemImpl;
+    struct SubsystemBase;
 
     /**
      * \enum Subsystem state
      */
-    enum class SubsystemState : std::uint8_t
-    {
+    enum class SubsystemState : std::uint8_t {
         INIT = 0, RUNNING , STOPPED , ERROR , DESTROY
     };
 
     using SubsystemTag = std::uint32_t;
 
     /* Convenience alias */
-    using SubsystemParentsList = std::initializer_list<std::reference_wrapper<SubsystemImpl>>;
+    using SubsystemParentsList = std::initializer_list<std::reference_wrapper<SubsystemBase>>;
 
+    /**< Map type that SubsystemMap manages.
+     * This is tag->{state, ref} since when children are constructing, the child reaches
+     * into the parent (by ref) and adds itself, for example.
+     */
     using subsystem_map_type = std::unordered_map<
         SubsystemTag,
-        std::pair<SubsystemState, std::reference_wrapper<SubsystemImpl>>, std::hash<SubsystemTag>
+        std::pair<SubsystemState, std::reference_wrapper<SubsystemBase>>, std::hash<SubsystemTag>
     >;
 
     /**< Alias/typedef for the systemstate bus */
@@ -89,8 +92,7 @@ namespace management
          * (initialized via NSDMI). This is specific to libstdc++
          * and maybe libc++
          */
-        pthread_rwlock_t m_state_lock =
-            PTHREAD_RWLOCK_WRITER_NONRECURSIVE_INITIALIZER_NP;
+        pthread_rwlock_t m_state_lock = PTHREAD_RWLOCK_INITIALIZER;
 
         /**< Managed state map */
         subsystem_map_type m_map;
@@ -141,10 +143,10 @@ namespace management
 #endif
     };
 
-    struct SubsystemImpl {
-        virtual ~SubsystemImpl() = default;
-        virtual void add_child(SubsystemImpl & child) = 0;
-        virtual void add_parent(SubsystemImpl & parent) = 0;
+    struct SubsystemBase {
+        virtual ~SubsystemBase() = default;
+        virtual void add_child(SubsystemBase & child) = 0;
+        virtual void add_parent(SubsystemBase & parent) = 0;
         virtual void remove_child(SubsystemTag tag) = 0;
         virtual void remove_parent(SubsystemTag tag) = 0;
         virtual void put_message(SubsystemIPC msg) = 0;
@@ -161,7 +163,7 @@ namespace management
      * @brief Subsystem
      */
     template<typename Bus=DefaultSubsystemBus<SubsystemIPC>>
-        class Subsystem : public SubsystemImpl
+        class Subsystem : public SubsystemBase
     {
     public:
 
@@ -210,37 +212,22 @@ namespace management
          * @brief Adds a child to this subsystem
          * @param child The child pointer to add
          */
-        void add_child(SubsystemImpl & child) override
+        void add_child(SubsystemBase & child) override
         {
             /* lock here as this can be called from a child,
              * ie - m_parents->add_child(this) */
             std::lock_guard<lock_t> lk{m_state_change_mutex};
-
-            auto k = child.get_tag();
-
-            /* Subsystem already contains child */
-            if (m_children.count(k)) {
-                return;
-            }
-
-            m_children.insert(k);
+            m_children.insert(child.get_tag());
         }
 
         /**
          * @brief Adds a parent to this subsystem
          * @param parent The parent pointer to add
          */
-        void add_parent(SubsystemImpl & parent) override
+        void add_parent(SubsystemBase & parent) override
         {
             std::lock_guard<lock_t> lk(m_state_change_mutex);
-
-            auto k = parent.get_tag();
-
-            if (m_parents.count(k)) {
-                return;
-            }
-
-            m_parents.insert(k);
+            m_parents.insert(parent.get_tag());
         }
 
         /**
@@ -250,11 +237,6 @@ namespace management
         void remove_child(SubsystemTag tag) override
         {
             std::lock_guard<lock_t> lk{m_state_change_mutex};
-
-            if (!m_children.count(tag)) {
-                return;
-            }
-
             m_children.erase(tag);
         }
 
@@ -265,11 +247,6 @@ namespace management
         void remove_parent(SubsystemTag tag) override
         {
             std::lock_guard<lock_t> lk{m_state_change_mutex};
-
-            if (!m_parents.count(tag)) {
-                return;
-            }
-
             m_parents.erase(tag);
         }
 
@@ -354,7 +331,7 @@ namespace management
         /**
          * @brief Launches a runnable for each active child subsystem
          * @tparam Runnable The type of the runnable
-       * @param runnable The runnable object
+         * @param runnable The runnable object
          */
         template<typename Runnable>
             void for_all_active_children(Runnable && runnable)
@@ -485,12 +462,12 @@ namespace management
             m_state = state;
             m_subsystem_map_ref.put(m_tag, m_state);
 
-            for_all_active_parents([this] (SubsystemImpl & p) {
-                                   p.put_message({SubsystemIPC::CHILD, m_tag, m_state});
+            for_all_active_parents([this] (SubsystemBase & p) {
+                                      p.put_message({SubsystemIPC::CHILD, m_tag, m_state});
                                    });
 
-            for_all_active_children([this] (SubsystemImpl & c) {
-                                    c.put_message({SubsystemIPC::PARENT, m_tag, m_state});
+            for_all_active_children([this] (SubsystemBase & c) {
+                                      c.put_message({SubsystemIPC::PARENT, m_tag, m_state});
                                     });
         }
 
@@ -535,7 +512,7 @@ namespace management
             }
 
             m_subsystem_map_ref.put(m_tag,
-                                    {m_state, std::ref(static_cast<SubsystemImpl>(*this))});
+                                    {m_state, std::ref<SubsystemBase>(*this)});
         }
 
         Subsystem(Subsystem const &) = delete;
@@ -681,6 +658,8 @@ namespace management
             }
 
             handle_ipc_message(*item.get());
+
+            return true;
         }
 
         /**

@@ -5,7 +5,7 @@
 
 using namespace management;
 
-struct FirstParent : ThreadedSubsystem
+struct FirstParent : DefaultThreadedSubsystem
 {
 public:
     FirstParent(SubsystemMap & m) :
@@ -29,7 +29,7 @@ public:
     void on_destroy() override { }
 };
 
-struct FirstChild : ThreadedSubsystem
+struct FirstChild : DefaultThreadedSubsystem
 {
 public:
     FirstChild(SubsystemMap & m, SubsystemParentsList parents) :
