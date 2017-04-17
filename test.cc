@@ -8,6 +8,8 @@
 #include <iostream>
 #include <cassert>
 
+#include <boost/variant.hpp>
+
 #include "subsystem.hh"
 
 using namespace management;
@@ -18,7 +20,7 @@ using namespace management;
 struct Os_Subsystem : DefaultThreadedSubsystem
 {
     Os_Subsystem(SubsystemMap & m) :
-        ThreadedSubsystem("OS", m, {})
+        DefaultThreadedSubsystem("OS", m, {})
     {
         SIM_MS(300);
     }
@@ -35,7 +37,7 @@ struct Os_Subsystem : DefaultThreadedSubsystem
 struct Foo_Subsystem : DefaultThreadedSubsystem
 {
     explicit Foo_Subsystem(SubsystemMap & m, SubsystemParentsList parents) :
-        ThreadedSubsystem("FOO", m, parents)
+        DefaultThreadedSubsystem("FOO", m, parents)
     { }
 
     void on_error() override {
@@ -46,7 +48,7 @@ struct Foo_Subsystem : DefaultThreadedSubsystem
 struct Bar_Subsystem : DefaultThreadedSubsystem
 {
     explicit Bar_Subsystem(SubsystemMap &m, SubsystemParentsList parents) :
-       ThreadedSubsystem("BAR", m, parents)
+       DefaultThreadedSubsystem("BAR", m, parents)
     { }
 
     void on_error() override {
@@ -54,12 +56,40 @@ struct Bar_Subsystem : DefaultThreadedSubsystem
     }
 };
 
+#if 1
+struct MyIPC final
+{
+    int x;
+    float y;
+};
+
+using MyVariant = boost::variant<SubsystemIPC, MyIPC, std::nullptr_t>;
+
+struct Baz_Subsystem: ThreadedSubsystem<ThreadsafeQueue<MyVariant>>
+{
+    explicit Baz_Subsystem(SubsystemMap &m, SubsystemParentsList parents) :
+       ThreadedSubsystem<ThreadsafeQueue<MyVariant>>("BAZ", m, parents)
+    {
+    }
+
+    bool handle_ipc_message(MyVariant v)
+    {
+        (void)v;
+        std::cout << "HEEEERR\n";
+        return true;
+    }
+};
+#endif
+
 int main()
 {
     std::cout << "Main thread TID: " << std::hash<std::thread::id>()(std::this_thread::get_id()) << std::endl;
 
     // create
     SubsystemMap map{};
+    Baz_Subsystem b{map, {}};
+    b.destroy();
+#if 0
     Os_Subsystem os{map};
     Foo_Subsystem foo{map, SubsystemParentsList{os}};
     Bar_Subsystem bar{map, SubsystemParentsList{os}};
@@ -100,6 +130,8 @@ int main()
 
 #ifndef NDEBUG
     std::cout << std::endl << map << std::endl;
+#endif
+
 #endif
 }
 

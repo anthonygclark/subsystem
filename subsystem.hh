@@ -19,10 +19,18 @@
 #include <unordered_map>
 #include <utility>
 #include <algorithm>
+#include <cassert>
 
 #include <pthread.h>
 
 #include "threadsafe_queue.hh"
+
+/* TODO
+ * - Remove SubsystemBase
+ * - Constructor (it's just gross currently)
+ *
+ *
+ */
 
 /* Comment this out to not use/throw exceptions */
 #define SUBSYSTEM_USE_EXCEPTIONS
@@ -34,6 +42,7 @@ namespace sizes
 
 namespace management
 {
+    /* Forward */
     struct SubsystemBase;
 
     /**
@@ -57,7 +66,7 @@ namespace management
         std::pair<SubsystemState, std::reference_wrapper<SubsystemBase>>, std::hash<SubsystemTag>
     >;
 
-    /**< Alias/typedef for the systemstate bus */
+    /**< Alias/typedef for the default bus */
     template<typename M>
         using DefaultSubsystemBus = ThreadsafeQueue<M>;
 
@@ -109,6 +118,12 @@ namespace management
         ~SubsystemMap();
 
         /**
+         * @brief Removes element
+         * @param key Element to remove
+         */
+        void remove(key_type key);
+
+        /**
          * @brief Proxy for retrieving an item from the map.
          * @details Note, this is a value type as we don't want to hold references
          * @param key The lookup
@@ -120,15 +135,7 @@ namespace management
          * @param key The tag to update
          * @param value The new value
          */
-        void put(key_type key, value_type value);
-
-        /**
-         * @brief Proxy for insertion into an existing entry
-         * @details This updates the subsystem's pointer value
-         * @param key The tag to update
-         * @param item The new pointer value
-         */
-        void put(key_type key, value_type::second_type::type & item);
+        void put_new(key_type key, value_type value);
 
         /**
          * @brief Proxy for insertion into an existing entry
@@ -136,14 +143,15 @@ namespace management
          * @param key The tag to update
          * @param state The new state
          */
-        void put(key_type key, SubsystemState state);
+        void put_state(key_type key, SubsystemState state);
 
 #ifndef NDEBUG
         friend std::ostream & operator<< (std::ostream & s, SubsystemMap const & m);
 #endif
     };
 
-    struct SubsystemBase {
+    struct SubsystemBase
+    {
         virtual ~SubsystemBase() = default;
         virtual void add_child(SubsystemBase & child) = 0;
         virtual void add_parent(SubsystemBase & parent) = 0;
@@ -152,10 +160,9 @@ namespace management
         virtual void put_message(SubsystemIPC msg) = 0;
 
         SubsystemTag m_tag = 0;
-        std::string m_name;
+        std::string m_name = "";
 
         SubsystemTag get_tag() const { return m_tag; }
-
         std::string get_name() const { return m_name; }
     };
 
@@ -165,8 +172,6 @@ namespace management
     template<typename Bus=DefaultSubsystemBus<SubsystemIPC>>
         class Subsystem : public SubsystemBase
     {
-    public:
-
     protected:
         /**< Current parent tags */
         std::set<SubsystemTag> m_parents;
@@ -460,7 +465,7 @@ namespace management
 
             /* do the actual state change */
             m_state = state;
-            m_subsystem_map_ref.put(m_tag, m_state);
+            m_subsystem_map_ref.put_state(m_tag, m_state);
 
             for_all_active_parents([this] (SubsystemBase & p) {
                                       p.put_message({SubsystemIPC::CHILD, m_tag, m_state});
@@ -511,8 +516,8 @@ namespace management
                 parent_item.get().add_child(*this);
             }
 
-            m_subsystem_map_ref.put(m_tag,
-                                    {m_state, std::ref<SubsystemBase>(*this)});
+            m_subsystem_map_ref.put_new(m_tag,
+                                        {m_state, std::ref<SubsystemBase>(*this)});
         }
 
         Subsystem(Subsystem const &) = delete;
@@ -520,7 +525,10 @@ namespace management
         /**
          * @brief Destructor
          */
-        virtual ~Subsystem() = default;
+        virtual ~Subsystem()
+        {
+            m_subsystem_map_ref.remove(m_tag);
+        }
 
         /**
          * @brief Custom Start function
@@ -584,7 +592,14 @@ namespace management
             (void)event;
         }
 
-        bool handle_ipc_message(SubsystemIPC event)
+        bool handle_ipc_message(typename Bus::type event)
+        {
+            (void)event;
+            assert(false && "This one...");
+            return false;
+        }
+
+        bool handle_subsystem_ipc_message(SubsystemIPC event)
         {
             switch(event.from)
             {
@@ -651,15 +666,16 @@ namespace management
             auto item = m_bus.wait_and_pop();
 
             /* detect termination */
-            if (item == typename decltype(m_bus)::terminator()) {
+            if (item == typename Bus::terminator()) {
                 /* notify the last waiting state or external waiters */
                 m_proceed_signal.notify_one();
                 return false;
             }
 
-            handle_ipc_message(*item.get());
-
-            return true;
+            /* Retreive value from unique_ptr in ThreadedSubsystem.
+             * TODO this depends on ThreadedSubsystem or its interface
+             */
+            return handle_ipc_message(*item.get());
         }
 
         /**

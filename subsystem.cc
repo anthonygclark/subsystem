@@ -29,6 +29,12 @@ namespace management
         pthread_rwlock_destroy(&m_state_lock);
     }
 
+    void SubsystemMap::remove(SubsystemMap::key_type key)
+    {
+        /* explicitly ignore return */
+        (void)m_map.erase(key);
+    }
+
     SubsystemMap::value_type SubsystemMap::get(SubsystemMap::key_type key)
     {
         pthread_rwlock_rdlock(&m_state_lock);
@@ -37,7 +43,7 @@ namespace management
         return ret;
     }
 
-    void SubsystemMap::put(SubsystemMap::key_type key, SubsystemMap::value_type value)
+    void SubsystemMap::put_new(SubsystemMap::key_type key, SubsystemMap::value_type value)
     {
         pthread_rwlock_wrlock(&m_state_lock);
         m_map.erase(key);
@@ -45,18 +51,10 @@ namespace management
         pthread_rwlock_unlock(&m_state_lock);
     }
 
-    void SubsystemMap::put(SubsystemMap::key_type key, SubsystemMap::value_type::second_type::type & ss)
-    {
-        assert(m_map.size() >= m_max_subsystems && "Attempting to exceed max number of subsystems");
-        auto item = get(key);
-        item.second = std::ref(ss);
-        put(key, std::make_pair(item.first, item.second));
-    }
-
-    void SubsystemMap::put(SubsystemMap::key_type key, SubsystemState state)
+    void SubsystemMap::put_state(SubsystemMap::key_type key, SubsystemState state)
     {
         auto item = get(key);
-        put(key, std::make_pair(state, item.second));
+        put_new(key, std::make_pair(state, item.second));
         assert(get(key).first == state);
     }
 
