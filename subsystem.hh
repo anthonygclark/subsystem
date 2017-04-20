@@ -20,8 +20,12 @@
 #include <utility>
 #include <algorithm>
 #include <cassert>
+#include <type_traits>
 
 #include <pthread.h>
+
+/* until std variant is available... */
+#include <boost/variant.hpp>
 
 #include "threadsafe_queue.hh"
 
@@ -150,6 +154,17 @@ namespace management
 #endif
     };
 
+    namespace detail
+    {
+        struct NoneType { };
+    };
+
+    template<typename... Ts>
+    struct SubsystemIPC_Extended final
+    {
+        using variant = boost::variant<SubsystemIPC, Ts...>;
+    };
+
     struct SubsystemBase
     {
         virtual ~SubsystemBase() = default;
@@ -169,7 +184,7 @@ namespace management
     /**
      * @brief Subsystem
      */
-    template<typename Bus=DefaultSubsystemBus<SubsystemIPC>>
+    template<typename Bus=DefaultSubsystemBus<SubsystemIPC>, typename SP=detail::NoneType>
         class Subsystem : public SubsystemBase
     {
     protected:
@@ -576,7 +591,13 @@ namespace management
             case SubsystemState::RUNNING:
                 start(); break;
             case SubsystemState::INIT:
+                break;
             default:
+#ifdef SUBSYSTEM_USE_EXCEPTIONS
+                throw std::runtime_error("Invalid state field in SubsystemIPC");
+#else
+                /* ignore? */
+#endif
                 break;
             }
         }
@@ -594,8 +615,20 @@ namespace management
 
         bool handle_ipc_message(typename Bus::type event)
         {
-            (void)event;
-            assert(false && "This one...");
+            if constexpr (std::is_same<typename Bus::type, SubsystemIPC>::value)
+            {
+                return handle_subsystem_ipc_message(event);
+            }
+            else if constexpr (!std::is_same<SP, detail::NoneType>::value)
+            {
+                /* Use static polymorphism (CRTP) to invoke derived's
+                 * handle_ipc call
+                 * TODO detect recursion?
+                 */
+                return static_cast<SP*>(this)->handle_ipc_message(event);
+            }
+
+            assert(false && "I have no idea how you are here");
             return false;
         }
 
@@ -691,8 +724,8 @@ namespace management
      * @details This is useful if you want the subsystem to execute start/stop/error/destroy
      *          in its own thread. Usually this is desired.
      */
-    template<typename Bus=DefaultSubsystemBus<SubsystemIPC>>
-        class ThreadedSubsystem : public Subsystem<Bus>
+    template<typename... Ts>
+        class ThreadedSubsystem : public Subsystem<Ts...>
     {
     private:
         /**< managed thread. Must be joinable */
@@ -706,7 +739,7 @@ namespace management
          * @param parents A list of parent subsystems
          */
         ThreadedSubsystem(std::string const & name, SubsystemMap & map, SubsystemParentsList parents) :
-            Subsystem<Bus>(name, map, parents)
+            Subsystem<Ts...>(name, map, parents)
         {
             m_thread = std::thread{[this] ()
                 {

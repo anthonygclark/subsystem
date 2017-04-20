@@ -17,6 +17,7 @@ using namespace management;
 #define SIM_MS(X) std::this_thread::sleep_for(std::chrono::milliseconds(X))
 #define SIM_S(X) std::this_thread::sleep_for(std::chrono::seconds(X))
 
+#if 0
 struct Os_Subsystem : DefaultThreadedSubsystem
 {
     Os_Subsystem(SubsystemMap & m) :
@@ -56,7 +57,8 @@ struct Bar_Subsystem : DefaultThreadedSubsystem
     }
 };
 
-#if 1
+#endif
+
 struct MyIPC final
 {
     int x;
@@ -65,21 +67,46 @@ struct MyIPC final
 
 using MyVariant = boost::variant<SubsystemIPC, MyIPC, std::nullptr_t>;
 
-struct Baz_Subsystem: ThreadedSubsystem<ThreadsafeQueue<MyVariant>>
+struct Baz_Subsystem : public ThreadedSubsystem<ThreadsafeQueue<MyVariant>, Baz_Subsystem>
 {
+    struct variant_helper : boost::static_visitor<bool>
+    {
+        Baz_Subsystem & m_subsys;
+
+        variant_helper(Baz_Subsystem & ss) :
+            m_subsys(ss)
+        {
+        }
+
+        bool operator() (SubsystemIPC & f) const
+        {
+            m_subsys.handle_subsystem_ipc_message(f);
+            return true;
+        }
+
+        bool operator() (MyIPC & f) const
+        {
+            (void)f;
+            return true;
+        }
+
+        bool operator() (std::nullptr_t f) const
+        {
+            (void)f;
+            return true;
+        }
+    };
+
     explicit Baz_Subsystem(SubsystemMap &m, SubsystemParentsList parents) :
-       ThreadedSubsystem<ThreadsafeQueue<MyVariant>>("BAZ", m, parents)
+       ThreadedSubsystem<ThreadsafeQueue<MyVariant>, Baz_Subsystem>("BAZ", m, parents)
     {
     }
 
     bool handle_ipc_message(MyVariant v)
     {
-        (void)v;
-        std::cout << "HEEEERR\n";
-        return true;
+       return boost::apply_visitor(variant_helper(*this), v);
     }
 };
-#endif
 
 int main()
 {
@@ -88,7 +115,16 @@ int main()
     // create
     SubsystemMap map{};
     Baz_Subsystem b{map, {}};
+    b.start();
+    SIM_S(1);
+
+    std::cout << map << std::endl;
+
     b.destroy();
+    SIM_S(1);
+
+    std::cout << map << std::endl;
+
 #if 0
     Os_Subsystem os{map};
     Foo_Subsystem foo{map, SubsystemParentsList{os}};

@@ -100,12 +100,12 @@ int main(void)
 
     simulate_work(100);
 
-    parent.reset();
-    child.reset();
-
 #ifndef NDEBUG
     std::cout << std::endl << map << std::endl;
 #endif
+
+    parent.reset();
+    child.reset();
 
     return 0;
 }
