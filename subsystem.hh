@@ -74,6 +74,7 @@ namespace management
     template<typename M>
         using DefaultSubsystemBus = ThreadsafeQueue<M>;
 
+
     /**
      * @brief Simple structure containing primitives to carry state
      *   changes.
@@ -100,15 +101,15 @@ namespace management
     private:
         /**< Max number of subsystems */
         std::uint32_t m_max_subsystems;
-
-        /**< RW lock for controlling access to the state map
-         * (initialized via NSDMI). This is specific to libstdc++
-         * and maybe libc++
-         */
-        pthread_rwlock_t m_state_lock = PTHREAD_RWLOCK_INITIALIZER;
-
         /**< Managed state map */
         subsystem_map_type m_map;
+        /** */
+        std::mutex m_lock;
+    public:
+        /**
+         * @return A unique tag for each subsystem
+         */
+        static SubsystemTag generate_subsystem_tag();
 
     public:
         /**
@@ -119,7 +120,7 @@ namespace management
         /**
          * @brief Destructor
          */
-        ~SubsystemMap();
+        ~SubsystemMap() = default;
 
         /**
          * @brief Removes element
@@ -154,16 +155,18 @@ namespace management
 #endif
     };
 
-    namespace detail
-    {
-        struct NoneType { };
+#ifndef NDEBUG
+    constexpr const char * StateNameStrings[] = {
+        "INIT\0",
+        "RUNNING\0",
+        "STOPPED\0",
+        "ERROR\0",
+        "DESTROY\0",
     };
+#endif
 
     template<typename... Ts>
-    struct SubsystemIPC_Extended final
-    {
-        using variant = boost::variant<SubsystemIPC, Ts...>;
-    };
+        using SubsystemIPC_Extended = boost::variant<SubsystemIPC, Ts...>;
 
     struct SubsystemBase
     {
@@ -176,15 +179,24 @@ namespace management
 
         SubsystemTag m_tag = 0;
         std::string m_name = "";
+        /**< The current subsystem state */
+        SubsystemState m_state = SubsystemState::INIT;
 
         SubsystemTag get_tag() const { return m_tag; }
         std::string get_name() const { return m_name; }
+        SubsystemState get_state() const { return m_state; }
     };
 
     /**
      * @brief Subsystem
+     * @details Communicates with other subsystems via SubsystemIPC and Bus. Bus does
+     *          not have to the same on all subsystems but each Bus must support SubsystemIPC.
+     *          See SubsystemIPC_Extended.
+     * @tparam Bus IPC bus
+     * @tparam SP Static Polymorphis type. This is a CRTP derived class that we invoke
+     *          handle_ipc(Bus::type t) on. Default std::nullptr_t
      */
-    template<typename Bus=DefaultSubsystemBus<SubsystemIPC>, typename SP=detail::NoneType>
+    template<typename Bus=DefaultSubsystemBus<SubsystemIPC>, typename SP=std::nullptr_t>
         class Subsystem : public SubsystemBase
     {
     protected:
@@ -205,8 +217,6 @@ namespace management
         /* alias */
         using lock_t = decltype(m_state_change_mutex);
 
-        /**< The current subsystem state */
-        SubsystemState m_state;
         /**< The communication bus between subsystems */
         Bus m_bus;
         /**< The reference to the managing systemstate */
@@ -215,18 +225,7 @@ namespace management
         std::condition_variable m_proceed_signal;
 
     private:
-        /**
-         * @return A unique tag for this subsystem
-         */
-        SubsystemTag generate_tag() const
-        {
-            static std::mutex tag_lock;
-            static SubsystemTag current = SubsystemTag{};
 
-            std::lock_guard<decltype(tag_lock)> lk{tag_lock};
-
-            return (0x55000000 | ++current);
-        }
 
         /**
          * @brief Adds a child to this subsystem
@@ -384,7 +383,11 @@ namespace management
             case SubsystemState::ERROR:
                 break;
             default:
+#ifdef SUBSYSTEM_USE_EXCEPTIONS
+                throw std::runtime_error("Invalid Child event");
+#else
                 return;
+#endif
             }
 
             /* hand off to the virtual handler */
@@ -401,7 +404,9 @@ namespace management
             switch(event.state)
             {
             case SubsystemState::INIT:
+                break;
             case SubsystemState::RUNNING:
+                break;
             case SubsystemState::ERROR:
                 break;
             case SubsystemState::STOPPED:
@@ -410,10 +415,14 @@ namespace management
                 {
                     set_cancel_flag(true);
                     remove_parent(event.tag);
-                    break;
+                    return;
                 }
             default:
+#ifdef SUBSYSTEM_USE_EXCEPTIONS
+                throw std::runtime_error("Invalid Parent event");
+#else
                 return;
+#endif
             }
 
             /* hand off to the virtual handler */
@@ -443,7 +452,11 @@ namespace management
                     break;
                 }
             default:
+#ifdef SUBSYSTEM_USE_EXCEPTIONS
+                throw std::runtime_error("Invalid SELF event");
+#else
                 return;
+#endif
             }
 
             commit_state(event.state);
@@ -469,6 +482,8 @@ namespace management
             {
                 return;
             }
+            
+            std::cout << "Commiting state: " << StateNameStrings[static_cast<int>(state)] << std::endl;
 
             /* wait for a start signal */
             std::unique_lock<lock_t> lk{m_state_change_mutex};
@@ -516,10 +531,9 @@ namespace management
                   SubsystemMap & map,
                   SubsystemParentsList parents) :
             m_cancel_flag(false),
-            m_state(SubsystemState::INIT),
             m_subsystem_map_ref(map)
         {
-            m_tag = Subsystem::generate_tag();
+            m_tag = SubsystemMap::generate_subsystem_tag();
             m_name = name;
 
             /* Create a map of parents */
@@ -580,6 +594,8 @@ namespace management
          */
         virtual void on_parent(SubsystemIPC event)
         {
+            std::cout << "Got parent event: " << static_cast<int>(event.state) << std::endl;
+
             switch(event.state)
             {
             case SubsystemState::ERROR:
@@ -619,17 +635,13 @@ namespace management
             {
                 return handle_subsystem_ipc_message(event);
             }
-            else if constexpr (!std::is_same<SP, detail::NoneType>::value)
+            else if constexpr (std::is_same<SP, std::nullptr_t>::value == false)
             {
-                /* Use static polymorphism (CRTP) to invoke derived's
-                 * handle_ipc call
-                 * TODO detect recursion?
-                 */
+                 /* TODO detect recursion?  */
                 return static_cast<SP*>(this)->handle_ipc_message(event);
             }
 
-            assert(false && "I have no idea how you are here");
-            return false;
+            throw std::runtime_error("Unhandled handle_ipc() path");
         }
 
         bool handle_subsystem_ipc_message(SubsystemIPC event)
@@ -711,12 +723,6 @@ namespace management
             return handle_ipc_message(*item.get());
         }
 
-        /**
-         * @return The subsystem's current state
-         */
-        SubsystemState get_state() const {
-            return m_state;
-        }
     };
 
     /**

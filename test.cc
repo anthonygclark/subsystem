@@ -65,7 +65,7 @@ struct MyIPC final
     float y;
 };
 
-using MyVariant = boost::variant<SubsystemIPC, MyIPC, std::nullptr_t>;
+using MyVariant = SubsystemIPC_Extended<MyIPC, std::nullptr_t>;
 
 struct Baz_Subsystem : public ThreadedSubsystem<ThreadsafeQueue<MyVariant>, Baz_Subsystem>
 {
@@ -78,13 +78,13 @@ struct Baz_Subsystem : public ThreadedSubsystem<ThreadsafeQueue<MyVariant>, Baz_
         {
         }
 
-        bool operator() (SubsystemIPC & f) const
+        bool operator() (SubsystemIPC f) const
         {
             m_subsys.handle_subsystem_ipc_message(f);
             return true;
         }
 
-        bool operator() (MyIPC & f) const
+        bool operator() (MyIPC f) const
         {
             (void)f;
             return true;
@@ -98,7 +98,48 @@ struct Baz_Subsystem : public ThreadedSubsystem<ThreadsafeQueue<MyVariant>, Baz_
     };
 
     explicit Baz_Subsystem(SubsystemMap &m, SubsystemParentsList parents) :
-       ThreadedSubsystem<ThreadsafeQueue<MyVariant>, Baz_Subsystem>("BAZ", m, parents)
+       ThreadedSubsystem("BAZ", m, parents)
+    {
+    }
+
+    bool handle_ipc_message(MyVariant v)
+    {
+       return boost::apply_visitor(variant_helper(*this), v);
+    }
+};
+
+struct Baz_Subsystem2 : public ThreadedSubsystem<ThreadsafeQueue<MyVariant>, Baz_Subsystem2>
+{
+    struct variant_helper : boost::static_visitor<bool>
+    {
+        Baz_Subsystem2 & m_subsys;
+
+        variant_helper(Baz_Subsystem2 & ss) :
+            m_subsys(ss)
+        {
+        }
+
+        bool operator() (SubsystemIPC f) const
+        {
+            m_subsys.handle_subsystem_ipc_message(f);
+            return true;
+        }
+
+        bool operator() (MyIPC f) const
+        {
+            (void)f;
+            return true;
+        }
+
+        bool operator() (std::nullptr_t f) const
+        {
+            (void)f;
+            return true;
+        }
+    };
+
+    explicit Baz_Subsystem2(SubsystemMap &m, SubsystemParentsList parents) :
+       ThreadedSubsystem("BAZ2", m, parents)
     {
     }
 
@@ -115,14 +156,24 @@ int main()
     // create
     SubsystemMap map{};
     Baz_Subsystem b{map, {}};
-    b.start();
-    SIM_S(1);
+    Baz_Subsystem2 bb{map, {b}};
 
+    b.start();
+    
+    SIM_S(1);
     std::cout << map << std::endl;
 
-    b.destroy();
-    SIM_S(1);
+    b.error();
 
+    SIM_S(2);
+    std::cout << map << std::endl;
+    
+    assert((bb.get_state() == b.get_state()) && "WTF");
+
+    b.destroy();
+    bb.destroy();
+    
+    SIM_S(1);
     std::cout << map << std::endl;
 
 #if 0

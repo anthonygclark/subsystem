@@ -24,50 +24,54 @@ namespace management
         m_map.reserve(m_max_subsystems);
     }
 
-    SubsystemMap::~SubsystemMap()
+    SubsystemTag SubsystemMap::generate_subsystem_tag()
     {
-        pthread_rwlock_destroy(&m_state_lock);
+        static std::mutex tag_lock;
+        static SubsystemTag current = SubsystemTag{};
+
+        std::lock_guard<decltype(tag_lock)> lk{tag_lock};
+
+        return (0x55000000 | ++current);
     }
 
     void SubsystemMap::remove(SubsystemMap::key_type key)
     {
+        std::lock_guard<decltype(m_lock)> lk{m_lock};
         /* explicitly ignore return */
         (void)m_map.erase(key);
     }
 
     SubsystemMap::value_type SubsystemMap::get(SubsystemMap::key_type key)
     {
-        pthread_rwlock_rdlock(&m_state_lock);
+        std::lock_guard<decltype(m_lock)> lk{m_lock};
         SubsystemMap::value_type ret = m_map.at(key);
-        pthread_rwlock_unlock(&m_state_lock);
         return ret;
     }
 
     void SubsystemMap::put_new(SubsystemMap::key_type key, SubsystemMap::value_type value)
     {
-        pthread_rwlock_wrlock(&m_state_lock);
+        std::lock_guard<decltype(m_lock)> lk{m_lock};
         m_map.erase(key);
         m_map.emplace(key, value);
-        pthread_rwlock_unlock(&m_state_lock);
     }
 
     void SubsystemMap::put_state(SubsystemMap::key_type key, SubsystemState state)
     {
-        auto item = get(key);
-        put_new(key, std::make_pair(state, item.second));
-        assert(get(key).first == state);
+        std::lock_guard<decltype(m_lock)> lk{m_lock};
+        
+        std::cout << "Subsys: " << m_map.at(key).second.get().get_name() 
+            << " " << StateNameStrings[static_cast<int>(m_map.at(key).second.get().get_state())] << "->"
+            << StateNameStrings[static_cast<int>(state)] << std::endl; 
+
+        auto item = m_map.at(key);
+        m_map.erase(key);
+        m_map.emplace(key, std::make_pair(state, item.second));
+
+        assert(m_map.at(key).first == state);
     }
 
 #ifndef NDEBUG
     std::mutex debug_print_lock;
-
-    constexpr const char * StateNameStrings[] = {
-        "INIT\0",
-        "RUNNING\0",
-        "STOPPED\0",
-        "ERROR\0",
-        "DESTROY\0",
-    };
 
     std::ostream & operator<< (std::ostream & str, SubsystemMap const & m)
     {
