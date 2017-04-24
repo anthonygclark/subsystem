@@ -93,7 +93,7 @@ int main(void)
     /* triggers parent.on_stop(), then child.on_stop() */
     parent->stop();
 
-    simulate_work(100);
+    simulate_work(500);
 
     /* triggers parent.on_destroy(), then child.on_destroy() */
     parent->destroy();

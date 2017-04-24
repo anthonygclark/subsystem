@@ -86,7 +86,7 @@ struct Baz_Subsystem : public ThreadedSubsystem<ThreadsafeQueue<MyVariant>, Baz_
 
         bool operator() (MyIPC f) const
         {
-            (void)f;
+            std::cout << m_subsys.get_name() << " got MyIPC: " << f.x << " " << f.y << std::endl;
             return true;
         }
 
@@ -100,6 +100,13 @@ struct Baz_Subsystem : public ThreadedSubsystem<ThreadsafeQueue<MyVariant>, Baz_
     explicit Baz_Subsystem(SubsystemMap &m, SubsystemParentsList parents) :
        ThreadedSubsystem("BAZ", m, parents)
     {
+    }
+
+    void on_start() override
+    {
+        std::cout << m_name << " Sending MyIPC\n";
+        MyIPC x{1, 3.14};
+        put_message_extended(x);
     }
 
     bool handle_ipc_message(MyVariant v)
@@ -159,22 +166,29 @@ int main()
     Baz_Subsystem2 bb{map, {b}};
 
     b.start();
-    
-    SIM_S(1);
+
+    SIM_MS(1);
+
+#ifndef NDEBUG
     std::cout << map << std::endl;
+#endif
 
     b.error();
 
-    SIM_S(2);
+    SIM_MS(1);
+
+#ifndef NDEBUG
     std::cout << map << std::endl;
-    
-    assert((bb.get_state() == b.get_state()) && "WTF");
+#endif
 
     b.destroy();
     bb.destroy();
-    
-    SIM_S(1);
+
+    SIM_MS(1);
+
+#ifndef NDEBUG
     std::cout << map << std::endl;
+#endif
 
 #if 0
     Os_Subsystem os{map};

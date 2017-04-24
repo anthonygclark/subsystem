@@ -32,7 +32,7 @@
 /* TODO
  * - Remove SubsystemBase
  * - Constructor (it's just gross currently)
- *
+ * - When SP is defined for subsystem, ensure handle_ipc_message is defined in SP
  *
  */
 
@@ -179,7 +179,6 @@ namespace management
 
         SubsystemTag m_tag = 0;
         std::string m_name = "";
-        /**< The current subsystem state */
         SubsystemState m_state = SubsystemState::INIT;
 
         SubsystemTag get_tag() const { return m_tag; }
@@ -225,8 +224,6 @@ namespace management
         std::condition_variable m_proceed_signal;
 
     private:
-
-
         /**
          * @brief Adds a child to this subsystem
          * @param child The child pointer to add
@@ -277,7 +274,7 @@ namespace management
         {
             bool ret = false;
 
-            if (!has_parents()) {
+            if (!m_parents.size()) {
                 ret = true;
             }
             else if (m_state == SubsystemState::DESTROY) {
@@ -292,29 +289,16 @@ namespace management
                     ret = true;
                 }
                 else {
-                    /* go into parent map and test if each parent is running
-                     * or each parent is destroyed. The running case is typical
-                     * when we're waiting for parents to start. And the destroy case
-                     * is typical when we're waiting for parents to shutdown/destroy
-                     */
                     ret = std::all_of(m_parents.begin(), m_parents.end(),
                                       [this] (parent_mapping_t const & p) {
                                           auto item = m_subsystem_map_ref.get(p);
                                           auto s = item.first;
-                                          return (s == SubsystemState::RUNNING || s == SubsystemState::DESTROY);
+                                          return (s != SubsystemState::INIT && s != SubsystemState::DESTROY);
                                       });
                 }
             }
 
             return ret;
-        }
-
-        /**
-         * @brief Helper to determine if the subsystem has parents.
-         * @return T, has parents; F, does not have parents
-         */
-        bool has_parents() const {
-            return m_parents.size() > 0;
         }
 
         /**
@@ -403,19 +387,15 @@ namespace management
             /* handle cancellation flag */
             switch(event.state)
             {
-            case SubsystemState::INIT:
-                break;
-            case SubsystemState::RUNNING:
-                break;
-            case SubsystemState::ERROR:
-                break;
-            case SubsystemState::STOPPED:
-                break;
+            case SubsystemState::INIT: break;
+            case SubsystemState::RUNNING: break;
+            case SubsystemState::ERROR: break;
+            case SubsystemState::STOPPED: break;
             case SubsystemState::DESTROY:
                 {
-                    set_cancel_flag(true);
                     remove_parent(event.tag);
-                    return;
+                    set_cancel_flag();
+                    break;
                 }
             default:
 #ifdef SUBSYSTEM_USE_EXCEPTIONS
@@ -438,15 +418,12 @@ namespace management
             /* handle cancellation flag */
             switch(event.state)
             {
-            case SubsystemState::RUNNING:
-                on_start(); break;
-            case SubsystemState::ERROR:
-                on_error(); break;
-            case SubsystemState::STOPPED:
-                on_stop(); break;
+            case SubsystemState::RUNNING: on_start(); break;
+            case SubsystemState::ERROR: on_error(); break;
+            case SubsystemState::STOPPED: on_stop(); break;
             case SubsystemState::DESTROY:
                 {
-                    set_cancel_flag(true);
+                    set_cancel_flag();
                     on_destroy();
                     stop_bus();
                     break;
@@ -467,8 +444,7 @@ namespace management
          * @details This bypasses any wait state the subsystem is in
          * @param b The flag value to set
          */
-        void set_cancel_flag(bool b)
-        {
+        void set_cancel_flag(bool b = true) {
             m_cancel_flag = b;
         }
 
@@ -482,8 +458,6 @@ namespace management
             {
                 return;
             }
-            
-            std::cout << "Commiting state: " << StateNameStrings[static_cast<int>(state)] << std::endl;
 
             /* wait for a start signal */
             std::unique_lock<lock_t> lk{m_state_change_mutex};
@@ -516,8 +490,7 @@ namespace management
             }
 
             m_bus.terminate();
-
-            set_cancel_flag(true);
+            set_cancel_flag();
         }
 
     protected:
@@ -583,6 +556,11 @@ namespace management
          */
         virtual void on_destroy() { }
 
+        virtual void put_message_extended(typename Bus::type msg)
+        {
+            (void)msg;
+        }
+
         /**
          * @brief Action to take when a parent fires an event
          * @details The default implementation inherits the parent's state
@@ -594,20 +572,13 @@ namespace management
          */
         virtual void on_parent(SubsystemIPC event)
         {
-            std::cout << "Got parent event: " << static_cast<int>(event.state) << std::endl;
-
             switch(event.state)
             {
-            case SubsystemState::ERROR:
-                error(); break;
-            case SubsystemState::DESTROY:
-                destroy(); break;
-            case SubsystemState::STOPPED:
-                stop(); break;
-            case SubsystemState::RUNNING:
-                start(); break;
-            case SubsystemState::INIT:
-                break;
+            case SubsystemState::ERROR: error(); break;
+            case SubsystemState::DESTROY: destroy(); break;
+            case SubsystemState::STOPPED: stop(); break;
+            case SubsystemState::RUNNING: start(); break;
+            case SubsystemState::INIT: break;
             default:
 #ifdef SUBSYSTEM_USE_EXCEPTIONS
                 throw std::runtime_error("Invalid state field in SubsystemIPC");
@@ -632,14 +603,9 @@ namespace management
         bool handle_ipc_message(typename Bus::type event)
         {
             if constexpr (std::is_same<typename Bus::type, SubsystemIPC>::value)
-            {
                 return handle_subsystem_ipc_message(event);
-            }
             else if constexpr (std::is_same<SP, std::nullptr_t>::value == false)
-            {
-                 /* TODO detect recursion?  */
                 return static_cast<SP*>(this)->handle_ipc_message(event);
-            }
 
             throw std::runtime_error("Unhandled handle_ipc() path");
         }
@@ -648,27 +614,19 @@ namespace management
         {
             switch(event.from)
             {
-            case SubsystemIPC::PARENT:
-                handle_parent_event(event);
-                break;
-            case SubsystemIPC::CHILD:
-                handle_child_event(event);
-                break;
-            case SubsystemIPC::SELF:
-                handle_self_event(event);
-                break;
+            case SubsystemIPC::PARENT: handle_parent_event(event); break;
+            case SubsystemIPC::CHILD: handle_child_event(event); break;
+            case SubsystemIPC::SELF: handle_self_event(event); break;
             default:
 #ifdef SUBSYSTEM_USE_EXCEPTIONS
                 throw std::runtime_error("Invalid from field in SubsystemIPC");
 #else
                 /* ignore? */
-                return true;
+                return false;
 #endif
             }
 
-            /* notify the last waiting state or external waihers */
             m_proceed_signal.notify_one();
-
             return true;
         }
 

@@ -58,10 +58,6 @@ namespace management
     void SubsystemMap::put_state(SubsystemMap::key_type key, SubsystemState state)
     {
         std::lock_guard<decltype(m_lock)> lk{m_lock};
-        
-        std::cout << "Subsys: " << m_map.at(key).second.get().get_name() 
-            << " " << StateNameStrings[static_cast<int>(m_map.at(key).second.get().get_state())] << "->"
-            << StateNameStrings[static_cast<int>(state)] << std::endl; 
 
         auto item = m_map.at(key);
         m_map.erase(key);
