@@ -33,7 +33,6 @@
  * - Remove SubsystemBase
  * - Constructor (it's just gross currently)
  * - When SP is defined for subsystem, ensure handle_ipc_message is defined in SP
- *
  */
 
 /* Comment this out to not use/throw exceptions */
@@ -73,7 +72,6 @@ namespace management
     /**< Alias/typedef for the default bus */
     template<typename M>
         using DefaultSubsystemBus = ThreadsafeQueue<M>;
-
 
     /**
      * @brief Simple structure containing primitives to carry state
@@ -192,7 +190,7 @@ namespace management
      *          not have to the same on all subsystems but each Bus must support SubsystemIPC.
      *          See SubsystemIPC_Extended.
      * @tparam Bus IPC bus
-     * @tparam SP Static Polymorphis type. This is a CRTP derived class that we invoke
+     * @tparam SP Static Polymorphism type. This is a CRTP derived class that we invoke
      *          handle_ipc(Bus::type t) on. Default std::nullptr_t
      */
     template<typename Bus=DefaultSubsystemBus<SubsystemIPC>, typename SP=std::nullptr_t>
@@ -301,6 +299,7 @@ namespace management
             return ret;
         }
 
+
         /**
          * @brief Puts a message on this subsystem's message bus
          * @details Intended to be called from other subsystems as IPC
@@ -362,8 +361,11 @@ namespace management
                 remove_child(event.tag);
                 break;
             case SubsystemState::INIT:
+                [[fallthrough]];
             case SubsystemState::RUNNING:
+                [[fallthrough]];
             case SubsystemState::STOPPED:
+                [[fallthrough]];
             case SubsystemState::ERROR:
                 break;
             default:
@@ -556,11 +558,6 @@ namespace management
          */
         virtual void on_destroy() { }
 
-        virtual void put_message_extended(typename Bus::type msg)
-        {
-            (void)msg;
-        }
-
         /**
          * @brief Action to take when a parent fires an event
          * @details The default implementation inherits the parent's state
@@ -600,6 +597,30 @@ namespace management
             (void)event;
         }
 
+        /**
+         * @brief
+         * @param msg
+         */
+        bool put_message_extended(typename Bus::type msg)
+        {
+            if constexpr (std::is_same<typename Bus::type, SubsystemIPC>::value)
+                return put_message(msg);
+            else if constexpr (std::is_same<SP, std::nullptr_t>::value == false) {
+                m_bus.push(msg);
+                m_proceed_signal.notify_one();
+                return true;
+            }
+
+            throw std::runtime_error("Unhandled put_message_extended() path");
+        }
+
+        /**
+         * @brief Handle IPC message dispatch
+         * @detail If SP is not nullptr_t and Bus::type is not SubsystemIPC, then
+         *          this will call upward into SP's handle_ipc_message_call.
+         * @param event The event to handle
+         * @return T if success, F otherwise
+         */
         bool handle_ipc_message(typename Bus::type event)
         {
             if constexpr (std::is_same<typename Bus::type, SubsystemIPC>::value)
@@ -610,6 +631,11 @@ namespace management
             throw std::runtime_error("Unhandled handle_ipc() path");
         }
 
+        /**
+         * @brief Handles a SubsystemIPC message (and only that)
+         * @param event The IPC message to handle
+         * @return T if success, F otherwise. The F case is the exceptional path.
+         */
         bool handle_subsystem_ipc_message(SubsystemIPC event)
         {
             switch(event.from)

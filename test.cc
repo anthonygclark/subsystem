@@ -106,7 +106,8 @@ struct Baz_Subsystem : public ThreadedSubsystem<ThreadsafeQueue<MyVariant>, Baz_
     {
         std::cout << m_name << " Sending MyIPC\n";
         MyIPC x{1, 3.14};
-        put_message_extended(x);
+
+        put_message_extended(x); // self
     }
 
     bool handle_ipc_message(MyVariant v)
