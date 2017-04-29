@@ -531,6 +531,7 @@ namespace management
          */
         virtual ~Subsystem()
         {
+            stop_bus();
             m_subsystem_map_ref.remove(m_tag);
         }
 
@@ -606,6 +607,7 @@ namespace management
             if constexpr (std::is_same<typename Bus::type, SubsystemIPC>::value)
                 return put_message(msg);
             else if constexpr (std::is_same<SP, std::nullptr_t>::value == false) {
+                /* TODO copy of put_message */
                 m_bus.push(msg);
                 m_proceed_signal.notify_one();
                 return true;
