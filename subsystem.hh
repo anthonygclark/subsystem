@@ -45,6 +45,7 @@
  * - Remove SubsystemLink
  * - Constructor (it's just gross currently)
  * - Remove dependency on threadsafe_queue
+ * - Disallow cycles in parent/child mappings
  */
 
 namespace sizes
@@ -125,12 +126,8 @@ namespace management
         /**
          * @brief Base class for dispatcher. Currently used but not needed.
          */
-        struct dispatcher
-        {
-            template<typename V>
-                bool intercept_message(V &&) {
-                    return false;
-                }
+        struct dispatcher {
+            template<typename V> bool intercept_message(V &&) { return false; }
         };
 
         /**
@@ -141,10 +138,9 @@ namespace management
          * @tparam I CRTP dispatch target
          */
         template<typename I>
-            struct ipc_dispatcher : dispatcher
-        {
-            bool intercept_message(SubsystemIPC & i) { return static_cast<I *>(this)->operator()(i); }
-        };
+            struct ipc_dispatcher : dispatcher {
+                bool intercept_message(SubsystemIPC & i) { return static_cast<I *>(this)->operator()(i); }
+            };
 
 #ifdef SUBSYSTEM_ALLOW_BOOST
         /**
@@ -191,7 +187,7 @@ namespace management
         /**< Managed state map */
         SubsystemMapType m_map;
         /** RW lock */
-        std::mutex m_lock;
+        mutable std::mutex m_lock;
 
     public:
         /**
@@ -245,11 +241,8 @@ namespace management
 
 #ifndef NDEBUG
     constexpr const char * StateNameStrings[] = {
-        "INIT\0",
-        "RUNNING\0",
-        "STOPPED\0",
-        "ERROR\0",
-        "DESTROY\0",
+        "INIT\0", "RUNNING\0", "STOPPED\0",
+        "ERROR\0", "DESTROY\0",
     };
 #endif
 
@@ -575,44 +568,6 @@ namespace management
         }
 
     protected:
-        /**
-         * @brief Constructor
-         * @param name The name of the subsystem
-         * @param map The SubsystemMap coordinating this subsystem
-         * @param parents A list of parent subsystems
-         */
-        Subsystem(std::string const & name,
-                  SubsystemMap & map,
-                  SubsystemParentsList parents) :
-            m_cancel_flag(false),
-            m_subsystem_map_ref(map)
-        {
-            m_tag = SubsystemMap::generate_subsystem_tag();
-            m_name = name;
-
-            /* Create a map of parents */
-            for (auto & parent_item : parents)
-            {
-                /* add to parents */
-                add_parent(parent_item.get());
-                /* add this to the parent */
-                parent_item.get().add_child(*this);
-            }
-
-            m_subsystem_map_ref.put_new(m_tag,
-                                        {m_state, std::ref<SubsystemLink>(*this)});
-        }
-
-        Subsystem(Subsystem const &) = delete;
-
-        /**
-         * @brief Destructor
-         */
-        virtual ~Subsystem()
-        {
-            stop_bus();
-            m_subsystem_map_ref.remove(m_tag);
-        }
 
         /**
          * @brief Custom Start function
@@ -701,8 +656,66 @@ namespace management
             m_proceed_signal.notify_one();
             return true;
         }
+ 
+        /**
+         * @brief Handles a single bus message
+         * @return T, if the message was valid; F, if the terminator was caught
+         */
+        bool handle_bus_message()
+        {
+            auto item = m_bus.wait_and_pop();
+
+            /* detect termination */
+            if (item == typename decltype(m_bus)::terminator()) {
+                /* notify the last waiting state or external waiters */
+                m_proceed_signal.notify_one();
+                return false;
+            }
+
+            auto message = *item.get();
+            return handle_bus_message2(message);
+        }
 
     public:
+        /**
+         * @brief Constructor
+         * @param name The name of the subsystem
+         * @param map The SubsystemMap coordinating this subsystem
+         * @param parents A list of parent subsystems
+         */
+        Subsystem(std::string const & name,
+                  SubsystemMap & map,
+                  SubsystemParentsList parents={}) :
+            m_cancel_flag(false),
+            m_subsystem_map_ref(map)
+        {
+            m_tag = SubsystemMap::generate_subsystem_tag();
+            m_name = name;
+
+            /* Create a map of parents */
+            for (auto & parent_item : parents)
+            {
+                /* add to parents */
+                add_parent(parent_item.get());
+                /* add this to the parent */
+                parent_item.get().add_child(*this);
+            }
+
+            m_subsystem_map_ref.put_new(m_tag,
+                                        {m_state, std::ref<SubsystemLink>(*this)});
+        }
+
+        Subsystem(Subsystem const &) = delete;
+
+        /**
+         * @brief Destructor
+         */
+        virtual ~Subsystem()
+        {
+            stop_bus();
+            m_subsystem_map_ref.remove(m_tag);
+        }
+
         /**
          * @brief Start trigger
          */
@@ -730,26 +743,6 @@ namespace management
         void destroy() {
             put_message({SubsystemIPC::SELF, m_tag, SubsystemState::DESTROY});
         }
-
-    protected:
-        /**
-         * @brief Handles a single bus message
-         * @return T, if the message was valid; F, if the terminator was caught
-         */
-        bool handle_bus_message()
-        {
-            auto item = m_bus.wait_and_pop();
-
-            /* detect termination */
-            if (item == typename decltype(m_bus)::terminator()) {
-                /* notify the last waiting state or external waiters */
-                m_proceed_signal.notify_one();
-                return false;
-            }
-
-            auto message = *item.get();
-            return handle_bus_message2(message);
-        }
     };
 
     /**
@@ -771,15 +764,16 @@ namespace management
     private:
         /**< managed thread. Must be joinable */
         std::thread m_thread;
+        using Subsystem<Bus, T, Dispatch>::m_proceed_signal;
 
-    protected:
+    public:
         /**
          * @brief Constructor
          * @param name The name of the subsystem
          * @param map The SubsystemMap used to coordinate subsystems
          * @param parents A list of parent subsystems
          */
-        ThreadedSubsystem(std::string const & name, SubsystemMap & map, SubsystemParentsList parents) :
+        ThreadedSubsystem(std::string const & name, SubsystemMap & map, SubsystemParentsList parents={}) :
             Subsystem<Bus, T, Dispatch>(name, map, parents)
         {
             m_thread = std::thread{[this] ()
@@ -787,12 +781,15 @@ namespace management
                     while(this->handle_bus_message()) {
                         std::this_thread::yield();
                     }
+
+                    m_proceed_signal.notify_all();
                 }
             };
         }
 
         virtual ~ThreadedSubsystem()
         {
+            
             if (m_thread.joinable())
                 m_thread.join();
         }

@@ -65,11 +65,9 @@ namespace management
     }
 
 #ifndef NDEBUG
-    std::mutex debug_print_lock;
-
     std::ostream & operator<< (std::ostream & str, SubsystemMap const & m)
     {
-        std::lock_guard<decltype(debug_print_lock)> lk{debug_print_lock};
+        std::lock_guard<decltype(SubsystemMap::m_lock)> lk{m.m_lock};
 
         for (auto & pair : m.m_map)
         {

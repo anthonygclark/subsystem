@@ -55,7 +55,7 @@ struct SecondChild : ThreadedSubsystem<ThreadsafeQueue, SubsystemIPC_Extended_Ex
     /* forward the default handler for SubsystemIPC from the base class */
     using Subsystem::operator();
 
-    bool operator() (int & i) { (void)i; return false;}
+    bool operator() (int & i) { (void)i; return false; }
     bool operator() (std::string & i) { (void)i; return false; }
 };
 
