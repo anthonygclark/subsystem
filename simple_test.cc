@@ -44,7 +44,7 @@ public:
 };
 
 //-- CHILD2
-struct SecondChild : ThreadedSubsystem<SubsystemIPC_Extended_Example, SecondChild>,
+struct SecondChild : ThreadedSubsystem<ThreadsafeQueue, SubsystemIPC_Extended_Example, SecondChild>,
     helpers::extended_ipc_dispatcher<SecondChild>
 {
     SecondChild(SubsystemMap & m, SubsystemParentsList parents) :

@@ -1,12 +1,5 @@
-/**
- * @file subsystem.cc
- * @author Anthony Clark <clark.anthony.g@gmail.com>
- */
-
-#include <algorithm>
 #include <cassert>
 #include <cstdint>
-#include <memory>
 #include <mutex>
 
 #ifndef NDEBUG
@@ -14,6 +7,11 @@
 #endif
 
 #include "subsystem.hh"
+
+/**
+ * @file subsystem.cc
+ * @author Anthony Clark <clark.anthony.g@gmail.com>
+ */
 
 namespace management
 {

@@ -1,24 +1,19 @@
-#ifndef _SUBSYSTEM_H_
-#define _SUBSYSTEM_H_
+#ifndef _SUBSYSTEM_HH_3735928559_
+#define _SUBSYSTEM_HH_3735928559_
 
-
+#include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
-#include <iosfwd>
 #include <mutex>
 #include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <utility>
-#include <algorithm>
-#include <cassert>
-#include <type_traits>
-
-#include <pthread.h>
 
 /* Comment this out to not use/throw exceptions */
 #define SUBSYSTEM_USE_EXCEPTIONS
@@ -36,6 +31,10 @@
 #include <boost/variant.hpp>
 #endif
 
+#ifndef NDEBUG
+#include <iosfwd>
+#endif
+
 #include "threadsafe_queue.hh"
 
 /**
@@ -45,6 +44,7 @@
  * TODO
  * - Remove SubsystemLink
  * - Constructor (it's just gross currently)
+ * - Remove dependency on threadsafe_queue
  */
 
 namespace sizes
@@ -251,7 +251,7 @@ namespace management
     /**
      * @brief Subsystem
      */
-    template<typename T = SubsystemIPC, typename Dispatch = void>
+    template<template <typename...> class Bus=ThreadsafeQueue, typename T = SubsystemIPC, typename Dispatch = void>
         class Subsystem : public detail::SubsystemLink
     {
     protected:
@@ -273,7 +273,7 @@ namespace management
         using lock_t = decltype(m_state_change_mutex);
 
         /**< The communication bus between subsystems */
-        ThreadsafeQueue<T> m_bus;
+        Bus<T> m_bus;
         /**< The reference to the managing systemstate */
         SubsystemMap & m_subsystem_map_ref;
         /**< State change signal */
@@ -750,7 +750,7 @@ namespace management
      * @brief Specialization for the default subsystem which only handles SubsystemIPC
      */
     template<>
-        inline bool Subsystem<SubsystemIPC, void>::handle_bus_message2(SubsystemIPC & message) {
+        inline bool Subsystem<ThreadsafeQueue, SubsystemIPC, void>::handle_bus_message2(SubsystemIPC & message) {
             return operator()(message);
         }
 
@@ -759,8 +759,8 @@ namespace management
      * @details This is useful if you want the subsystem to execute start/stop/error/destroy
      *          in its own thread. Usually this is desired.
      */
-    template<typename T = SubsystemIPC, typename Dispatch = void>
-        class ThreadedSubsystem : public Subsystem<T, Dispatch>
+    template<template <typename...> class Bus=ThreadsafeQueue, typename T = SubsystemIPC, typename Dispatch = void>
+        class ThreadedSubsystem : public Subsystem<Bus, T, Dispatch>
     {
     private:
         /**< managed thread. Must be joinable */
@@ -774,7 +774,7 @@ namespace management
          * @param parents A list of parent subsystems
          */
         ThreadedSubsystem(std::string const & name, SubsystemMap & map, SubsystemParentsList parents) :
-            Subsystem<T, Dispatch>(name, map, parents)
+            Subsystem<Bus, T, Dispatch>(name, map, parents)
         {
             m_thread = std::thread{[this] ()
                 {
