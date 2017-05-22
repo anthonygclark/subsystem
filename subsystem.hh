@@ -123,7 +123,7 @@ namespace management
     namespace helpers
     {
         /**
-         * @brief
+         * @brief Base class for dispatcher. Currently used but not needed.
          */
         struct dispatcher
         {
@@ -134,8 +134,11 @@ namespace management
         };
 
         /**
-         * @brief
-         * @tparam I
+         * @brief Default ipc dispatcher
+         * @details Currently unused. We might use this if we make all IPC go
+         *          through CRTP to the derived. At the moment it's left here
+         *          for historical reasons.
+         * @tparam I CRTP dispatch target
          */
         template<typename I>
             struct ipc_dispatcher : dispatcher
@@ -145,8 +148,10 @@ namespace management
 
 #ifdef SUBSYSTEM_ALLOW_BOOST
         /**
-         * @brief
-         * @tparam I
+         * @brief Boost::static_visitor interop
+         * @details When a subsystem derived this class and when it received a boost::variant via
+         *          it's IPC bus, this intercept_message call will be invoked, applying the visitor.
+         * @tparam I CRTP dispatch target
          */
         template<typename I>
             struct extended_ipc_dispatcher : dispatcher, boost::static_visitor<bool>
@@ -250,6 +255,7 @@ namespace management
 
     /**
      * @brief Subsystem
+     * @details More docs please...
      */
     template<template <typename...> class Bus=ThreadsafeQueue, typename T = SubsystemIPC, typename Dispatch = void>
         class Subsystem : public detail::SubsystemLink
