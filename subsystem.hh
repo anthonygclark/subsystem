@@ -1,10 +1,6 @@
 #ifndef _SUBSYSTEM_H_
 #define _SUBSYSTEM_H_
 
-/**
- * @file subsystem.hh
- * @author Anthony Clark <clark.anthony.g@gmail.com>
- */
 
 #include <atomic>
 #include <condition_variable>
@@ -24,19 +20,32 @@
 
 #include <pthread.h>
 
-/* until std variant is available... */
+/* Comment this out to not use/throw exceptions */
+#define SUBSYSTEM_USE_EXCEPTIONS
+
+/* Allows subsystems to transmit more than just SubsystemIPC messages
+ * See SubsystemIPC_Extended
+ */
+#define SUBSYSTEM_ALLOW_BOOST
+
+#ifdef SUBSYSTEM_USE_EXCEPTIONS
+#include <stdexcept>
+#endif
+
+#ifdef SUBSYSTEM_ALLOW_BOOST
 #include <boost/variant.hpp>
+#endif
 
 #include "threadsafe_queue.hh"
 
-/* TODO
- * - Remove SubsystemBase
+/**
+ * @file subsystem.hh
+ * @author Anthony Clark <clark.anthony.g@gmail.com>
+ *
+ * TODO
+ * - Remove SubsystemLink
  * - Constructor (it's just gross currently)
- * - When SP is defined for subsystem, ensure handle_ipc_message is defined in SP
  */
-
-/* Comment this out to not use/throw exceptions */
-#define SUBSYSTEM_USE_EXCEPTIONS
 
 namespace sizes
 {
@@ -46,7 +55,15 @@ namespace sizes
 namespace management
 {
     /* Forward */
-    struct SubsystemBase;
+    namespace detail {
+        struct SubsystemLink;
+    }
+
+    /** */
+    using SubsystemTag = std::uint32_t;
+
+    /* Convenience alias */
+    using SubsystemParentsList = std::initializer_list<std::reference_wrapper<detail::SubsystemLink>>;
 
     /**
      * \enum Subsystem state
@@ -54,24 +71,6 @@ namespace management
     enum class SubsystemState : std::uint8_t {
         INIT = 0, RUNNING , STOPPED , ERROR , DESTROY
     };
-
-    using SubsystemTag = std::uint32_t;
-
-    /* Convenience alias */
-    using SubsystemParentsList = std::initializer_list<std::reference_wrapper<SubsystemBase>>;
-
-    /**< Map type that SubsystemMap manages.
-     * This is tag->{state, ref} since when children are constructing, the child reaches
-     * into the parent (by ref) and adds itself, for example.
-     */
-    using subsystem_map_type = std::unordered_map<
-        SubsystemTag,
-        std::pair<SubsystemState, std::reference_wrapper<SubsystemBase>>, std::hash<SubsystemTag>
-    >;
-
-    /**< Alias/typedef for the default bus */
-    template<typename M>
-        using DefaultSubsystemBus = ThreadsafeQueue<M>;
 
     /**
      * @brief Simple structure containing primitives to carry state
@@ -84,6 +83,82 @@ namespace management
         SubsystemState state; /**< The new state of the originator */
     };
 
+#ifdef SUBSYSTEM_ALLOW_BOOST
+    /**
+     * @brief Extended IPC type.
+     * @details Allows subsystems to carry other messages aside from SubsystemIPC
+     *          along their bus.
+     * @tparam Ts Other types to support
+     */
+    template<typename... Ts>
+        using SubsystemIPC_Extended = boost::variant<SubsystemIPC, Ts...>;
+#endif
+
+    namespace detail
+    {
+        /**
+         * @brief Binding between subsystems.
+         * @todo This should get reworked or removed
+         */
+        struct SubsystemLink
+        {
+            virtual ~SubsystemLink() = default;
+            virtual void add_child(SubsystemLink & child) = 0;
+            virtual void add_parent(SubsystemLink & parent) = 0;
+            virtual void remove_child(SubsystemTag tag) = 0;
+            virtual void remove_parent(SubsystemTag tag) = 0;
+            virtual void put_message(SubsystemIPC msg) = 0;
+
+            SubsystemTag m_tag = 0;
+            std::string m_name = "";
+            SubsystemState m_state = SubsystemState::INIT;
+
+            decltype(m_tag) get_tag() const { return m_tag; }
+            decltype(m_name) get_name() const { return m_name; }
+            decltype(m_state) get_state() const { return m_state; }
+        };
+
+    } /* end namespace detail */
+
+    namespace helpers
+    {
+        /**
+         * @brief
+         */
+        struct dispatcher
+        {
+            template<typename V>
+                bool intercept_message(V &&) {
+                    return false;
+                }
+        };
+
+        /**
+         * @brief
+         * @tparam I
+         */
+        template<typename I>
+            struct ipc_dispatcher : dispatcher
+        {
+            bool intercept_message(SubsystemIPC & i) { return static_cast<I *>(this)->operator()(i); }
+        };
+
+#ifdef SUBSYSTEM_ALLOW_BOOST
+        /**
+         * @brief
+         * @tparam I
+         */
+        template<typename I>
+            struct extended_ipc_dispatcher : dispatcher, boost::static_visitor<bool>
+        {
+            template<typename V>
+                bool intercept_message(V && v) {
+                    return boost::apply_visitor(*static_cast<I *>(this), v);
+                }
+        };
+#endif
+    } /* end namespace helpers */
+
     /**
      * @brief Basic proxy access to the shared state of all subsystems.
      * @details Having a 'global' map of subsystems complicates access, but reduces
@@ -91,18 +166,28 @@ namespace management
      */
     class SubsystemMap final
     {
+    private:
+        /**< Map type that SubsystemMap manages.
+         * This is tag->{state, ref} since when children are constructing, the child reaches
+         * into the parent (by ref) and adds itself, for example.
+         */
+        using SubsystemMapType = std::unordered_map<
+                    SubsystemTag,
+                    std::pair<SubsystemState, std::reference_wrapper<detail::SubsystemLink>>, std::hash<SubsystemTag>
+                >;
     public:
         /* alias */
-        using key_type = subsystem_map_type::key_type;
-        using value_type = subsystem_map_type::mapped_type;
+        using key_type = SubsystemMapType::key_type;
+        using value_type = SubsystemMapType::mapped_type;
 
     private:
         /**< Max number of subsystems */
         std::uint32_t m_max_subsystems;
         /**< Managed state map */
-        subsystem_map_type m_map;
-        /** */
+        SubsystemMapType m_map;
+        /** RW lock */
         std::mutex m_lock;
+
     public:
         /**
          * @return A unique tag for each subsystem
@@ -163,38 +248,11 @@ namespace management
     };
 #endif
 
-    template<typename... Ts>
-        using SubsystemIPC_Extended = boost::variant<SubsystemIPC, Ts...>;
-
-    struct SubsystemBase
-    {
-        virtual ~SubsystemBase() = default;
-        virtual void add_child(SubsystemBase & child) = 0;
-        virtual void add_parent(SubsystemBase & parent) = 0;
-        virtual void remove_child(SubsystemTag tag) = 0;
-        virtual void remove_parent(SubsystemTag tag) = 0;
-        virtual void put_message(SubsystemIPC msg) = 0;
-
-        SubsystemTag m_tag = 0;
-        std::string m_name = "";
-        SubsystemState m_state = SubsystemState::INIT;
-
-        SubsystemTag get_tag() const { return m_tag; }
-        std::string get_name() const { return m_name; }
-        SubsystemState get_state() const { return m_state; }
-    };
-
     /**
      * @brief Subsystem
-     * @details Communicates with other subsystems via SubsystemIPC and Bus. Bus does
-     *          not have to the same on all subsystems but each Bus must support SubsystemIPC.
-     *          See SubsystemIPC_Extended.
-     * @tparam Bus IPC bus
-     * @tparam SP Static Polymorphism type. This is a CRTP derived class that we invoke
-     *          handle_ipc(Bus::type t) on. Default std::nullptr_t
      */
-    template<typename Bus=DefaultSubsystemBus<SubsystemIPC>, typename SP=std::nullptr_t>
-        class Subsystem : public SubsystemBase
+    template<typename T = SubsystemIPC, typename Dispatch = void>
+        class Subsystem : public detail::SubsystemLink
     {
     protected:
         /**< Current parent tags */
@@ -215,7 +273,7 @@ namespace management
         using lock_t = decltype(m_state_change_mutex);
 
         /**< The communication bus between subsystems */
-        Bus m_bus;
+        ThreadsafeQueue<T> m_bus;
         /**< The reference to the managing systemstate */
         SubsystemMap & m_subsystem_map_ref;
         /**< State change signal */
@@ -226,7 +284,7 @@ namespace management
          * @brief Adds a child to this subsystem
          * @param child The child pointer to add
          */
-        void add_child(SubsystemBase & child) override
+        void add_child(SubsystemLink & child) override
         {
             /* lock here as this can be called from a child,
              * ie - m_parents->add_child(this) */
@@ -238,7 +296,7 @@ namespace management
          * @brief Adds a parent to this subsystem
          * @param parent The parent pointer to add
          */
-        void add_parent(SubsystemBase & parent) override
+        void add_parent(SubsystemLink & parent) override
         {
             std::lock_guard<lock_t> lk(m_state_change_mutex);
             m_parents.insert(parent.get_tag());
@@ -298,7 +356,6 @@ namespace management
 
             return ret;
         }
-
 
         /**
          * @brief Puts a message on this subsystem's message bus
@@ -361,11 +418,8 @@ namespace management
                 remove_child(event.tag);
                 break;
             case SubsystemState::INIT:
-                [[fallthrough]];
             case SubsystemState::RUNNING:
-                [[fallthrough]];
             case SubsystemState::STOPPED:
-                [[fallthrough]];
             case SubsystemState::ERROR:
                 break;
             default:
@@ -473,11 +527,11 @@ namespace management
             m_state = state;
             m_subsystem_map_ref.put_state(m_tag, m_state);
 
-            for_all_active_parents([this] (SubsystemBase & p) {
+            for_all_active_parents([this] (SubsystemLink & p) {
                                       p.put_message({SubsystemIPC::CHILD, m_tag, m_state});
                                    });
 
-            for_all_active_children([this] (SubsystemBase & c) {
+            for_all_active_children([this] (SubsystemLink & c) {
                                       c.put_message({SubsystemIPC::PARENT, m_tag, m_state});
                                     });
         }
@@ -493,6 +547,25 @@ namespace management
 
             m_bus.terminate();
             set_cancel_flag();
+        }
+
+        /**
+         * @brief Message handler implementation
+         * @details The default implementation here does dispatch via CRTP to Dispatch. See the
+         *          specialization for Subsystem<SubsystemIPC, void> below.
+         * @param message The latest bus message
+         * @return T if bus message was handled, F otherwise
+         */
+        bool handle_bus_message2(T & message)
+        {
+            /* compile-time check for Dispatch::intercept_message(T &)
+             * I wish I could put some context message here, but the error should be enough.
+             */
+            constexpr bool(Dispatch::*intercept_message_caller)(T &) =
+                &Dispatch::intercept_message;
+
+            /* CRTP dispatch */
+            return (static_cast<Dispatch *>(this)->*intercept_message_caller)(message);
         }
 
     protected:
@@ -521,7 +594,7 @@ namespace management
             }
 
             m_subsystem_map_ref.put_new(m_tag,
-                                        {m_state, std::ref<SubsystemBase>(*this)});
+                                        {m_state, std::ref<SubsystemLink>(*this)});
         }
 
         Subsystem(Subsystem const &) = delete;
@@ -599,46 +672,11 @@ namespace management
         }
 
         /**
-         * @brief
-         * @param msg
-         */
-        bool put_message_extended(typename Bus::type msg)
-        {
-            if constexpr (std::is_same<typename Bus::type, SubsystemIPC>::value)
-                return put_message(msg);
-            else if constexpr (std::is_same<SP, std::nullptr_t>::value == false) {
-                /* TODO copy of put_message */
-                m_bus.push(msg);
-                m_proceed_signal.notify_one();
-                return true;
-            }
-
-            throw std::runtime_error("Unhandled put_message_extended() path");
-        }
-
-        /**
-         * @brief Handle IPC message dispatch
-         * @detail If SP is not nullptr_t and Bus::type is not SubsystemIPC, then
-         *          this will call upward into SP's handle_ipc_message_call.
-         * @param event The event to handle
-         * @return T if success, F otherwise
-         */
-        bool handle_ipc_message(typename Bus::type event)
-        {
-            if constexpr (std::is_same<typename Bus::type, SubsystemIPC>::value)
-                return handle_subsystem_ipc_message(event);
-            else if constexpr (std::is_same<SP, std::nullptr_t>::value == false)
-                return static_cast<SP*>(this)->handle_ipc_message(event);
-
-            throw std::runtime_error("Unhandled handle_ipc() path");
-        }
-
-        /**
-         * @brief Handles a SubsystemIPC message (and only that)
+         * @brief Handles a SubsystemIPC message
          * @param event The IPC message to handle
          * @return T if success, F otherwise. The F case is the exceptional path.
          */
-        bool handle_subsystem_ipc_message(SubsystemIPC event)
+        bool operator()(SubsystemIPC & event)
         {
             switch(event.from)
             {
@@ -687,37 +725,42 @@ namespace management
             put_message({SubsystemIPC::SELF, m_tag, SubsystemState::DESTROY});
         }
 
-    public:
+    protected:
         /**
          * @brief Handles a single bus message
-         * @return T, if the message was valid; F, if /the terminator was caught
+         * @return T, if the message was valid; F, if the terminator was caught
          */
         bool handle_bus_message()
         {
             auto item = m_bus.wait_and_pop();
 
             /* detect termination */
-            if (item == typename Bus::terminator()) {
+            if (item == typename decltype(m_bus)::terminator()) {
                 /* notify the last waiting state or external waiters */
                 m_proceed_signal.notify_one();
                 return false;
             }
 
-            /* Retreive value from unique_ptr in ThreadedSubsystem.
-             * TODO this depends on ThreadedSubsystem or its interface
-             */
-            return handle_ipc_message(*item.get());
+            auto message = *item.get();
+            return handle_bus_message2(message);
         }
-
     };
+
+    /**
+     * @brief Specialization for the default subsystem which only handles SubsystemIPC
+     */
+    template<>
+        inline bool Subsystem<SubsystemIPC, void>::handle_bus_message2(SubsystemIPC & message) {
+            return operator()(message);
+        }
 
     /**
      * @brief Subsystem with a managed thread to handle bus messages
      * @details This is useful if you want the subsystem to execute start/stop/error/destroy
      *          in its own thread. Usually this is desired.
      */
-    template<typename... Ts>
-        class ThreadedSubsystem : public Subsystem<Ts...>
+    template<typename T = SubsystemIPC, typename Dispatch = void>
+        class ThreadedSubsystem : public Subsystem<T, Dispatch>
     {
     private:
         /**< managed thread. Must be joinable */
@@ -731,7 +774,7 @@ namespace management
          * @param parents A list of parent subsystems
          */
         ThreadedSubsystem(std::string const & name, SubsystemMap & map, SubsystemParentsList parents) :
-            Subsystem<Ts...>(name, map, parents)
+            Subsystem<T, Dispatch>(name, map, parents)
         {
             m_thread = std::thread{[this] ()
                 {
@@ -749,8 +792,6 @@ namespace management
         }
     };
 
-    using DefaultThreadedSubsystem = ThreadedSubsystem<DefaultSubsystemBus<SubsystemIPC>>;
-
-} // end namespace management
+} /* end namespace management */
 
 #endif // guard

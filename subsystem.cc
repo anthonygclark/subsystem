@@ -20,7 +20,7 @@ namespace management
     SubsystemMap::SubsystemMap(std::uint32_t max_subsystems) noexcept :
         m_max_subsystems(max_subsystems)
     {
-        m_map = subsystem_map_type{};
+        m_map = SubsystemMapType{};
         m_map.reserve(m_max_subsystems);
     }
 
