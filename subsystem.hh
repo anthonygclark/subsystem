@@ -518,9 +518,9 @@ namespace management
             std::unique_lock<lock_t> lk{m_state_change_mutex};
 
             /* spurious wakeup prevention */
-            while (!wait_for_parents()) {
+            do {
                 m_proceed_signal.wait(lk, [this] { return wait_for_parents(); });
-            }
+            } while (!wait_for_parents());
 
             /* do the actual state change */
             m_state = state;
@@ -541,7 +541,7 @@ namespace management
         void stop_bus()
         {
             while(auto trash = m_bus.try_pop()) {
-                /* ignore things here */
+                /* ignore all currently unprocessed events */
             }
 
             m_bus.terminate();
@@ -656,7 +656,7 @@ namespace management
             m_proceed_signal.notify_one();
             return true;
         }
- 
+
         /**
          * @brief Handles a single bus message
          * @return T, if the message was valid; F, if the terminator was caught
@@ -693,8 +693,7 @@ namespace management
             m_name = name;
 
             /* Create a map of parents */
-            for (auto & parent_item : parents)
-            {
+            for (auto & parent_item : parents) {
                 /* add to parents */
                 add_parent(parent_item.get());
                 /* add this to the parent */
@@ -712,7 +711,6 @@ namespace management
          */
         virtual ~Subsystem()
         {
-            stop_bus();
             m_subsystem_map_ref.remove(m_tag);
         }
 
@@ -764,7 +762,6 @@ namespace management
     private:
         /**< managed thread. Must be joinable */
         std::thread m_thread;
-        using Subsystem<Bus, T, Dispatch>::m_proceed_signal;
 
     public:
         /**
@@ -781,15 +778,12 @@ namespace management
                     while(this->handle_bus_message()) {
                         std::this_thread::yield();
                     }
-
-                    m_proceed_signal.notify_all();
                 }
             };
         }
 
         virtual ~ThreadedSubsystem()
         {
-            
             if (m_thread.joinable())
                 m_thread.join();
         }
