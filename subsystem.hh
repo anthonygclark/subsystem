@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cassert>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -21,13 +20,13 @@
 /* Allows subsystems to transmit more than just SubsystemIPC messages
  * See SubsystemIPC_Extended
  */
-#define SUBSYSTEM_ALLOW_BOOST
+#define SUBSYSTEM_HAS_BOOST
 
 #ifdef SUBSYSTEM_USE_EXCEPTIONS
 #include <stdexcept>
 #endif
 
-#ifdef SUBSYSTEM_ALLOW_BOOST
+#ifdef SUBSYSTEM_HAS_BOOST
 #include <boost/variant.hpp>
 #endif
 
@@ -42,10 +41,13 @@
  * @author Anthony Clark <clark.anthony.g@gmail.com>
  *
  * TODO
+ * - Fix deadlock caused by not using sleeps... this is a big one folks
  * - Remove SubsystemLink
  * - Constructor (it's just gross currently)
  * - Remove dependency on threadsafe_queue
  * - Disallow cycles in parent/child mappings
+ * - Move parent/child mappings to SubsystemMap/Link
+ *      - Better control flow into creating dependent subsystems.
  */
 
 namespace sizes
@@ -84,7 +86,7 @@ namespace management
         SubsystemState state; /**< The new state of the originator */
     };
 
-#ifdef SUBSYSTEM_ALLOW_BOOST
+#ifdef SUBSYSTEM_HAS_BOOST
     /**
      * @brief Extended IPC type.
      * @details Allows subsystems to carry other messages aside from SubsystemIPC
@@ -99,20 +101,28 @@ namespace management
     {
         /**
          * @brief Binding between subsystems.
-         * @todo This should get reworked or removed
+         * @todo This should get reworked or removed. At least 'friend' it with
+         *       SubsystemMap
          */
         struct SubsystemLink
         {
+            /**< Subsystem UUID */
+            SubsystemTag m_tag = 0;
+            /**< Subsystem Name */
+            std::string m_name = "";
+            /**< Current subsystem state */
+            SubsystemState m_state = SubsystemState::INIT;
+            /**< Current parent tags */
+            std::set<SubsystemTag> m_parents;
+            /**< Current child tags */
+            std::set<SubsystemTag> m_children;
+
             virtual ~SubsystemLink() = default;
             virtual void add_child(SubsystemLink & child) = 0;
             virtual void add_parent(SubsystemLink & parent) = 0;
             virtual void remove_child(SubsystemTag tag) = 0;
             virtual void remove_parent(SubsystemTag tag) = 0;
             virtual void put_message(SubsystemIPC msg) = 0;
-
-            SubsystemTag m_tag = 0;
-            std::string m_name = "";
-            SubsystemState m_state = SubsystemState::INIT;
 
             decltype(m_tag) get_tag() const { return m_tag; }
             decltype(m_name) get_name() const { return m_name; }
@@ -142,7 +152,7 @@ namespace management
                 bool intercept_message(SubsystemIPC & i) { return static_cast<I *>(this)->operator()(i); }
             };
 
-#ifdef SUBSYSTEM_ALLOW_BOOST
+#ifdef SUBSYSTEM_HAS_BOOST
         /**
          * @brief Boost::static_visitor interop
          * @details When a subsystem derived this class and when it received a boost::variant via
@@ -169,12 +179,12 @@ namespace management
     {
     private:
         /**< Map type that SubsystemMap manages.
-         * This is tag->{state, ref} since when children are constructing, the child reaches
-         * into the parent (by ref) and adds itself, for example.
+         * This is tag->ref since when children are constructing, the child reaches
+         * into the parent (by ref) and adds itself. This access should be better.
          */
         using SubsystemMapType = std::unordered_map<
                     SubsystemTag,
-                    std::pair<SubsystemState, std::reference_wrapper<detail::SubsystemLink>>, std::hash<SubsystemTag>
+                    std::reference_wrapper<detail::SubsystemLink>, std::hash<SubsystemTag>
                 >;
     public:
         /* alias */
@@ -224,15 +234,7 @@ namespace management
          * @param key The tag to update
          * @param value The new value
          */
-        void put_new(key_type key, value_type value);
-
-        /**
-         * @brief Proxy for insertion into an existing entry
-         * @details This updates the found subsystem's state
-         * @param key The tag to update
-         * @param state The new state
-         */
-        void put_state(key_type key, SubsystemState state);
+        void put(key_type key, value_type value);
 
 #ifndef NDEBUG
         friend std::ostream & operator<< (std::ostream & s, SubsystemMap const & m);
@@ -254,20 +256,12 @@ namespace management
         class Subsystem : public detail::SubsystemLink
     {
     protected:
-        /**< Current parent tags */
-        std::set<SubsystemTag> m_parents;
-        /**< Current child tags */
-        std::set<SubsystemTag> m_children;
         /**< Cancellation flag, determines if a subsystem can
          * stop waiting for it's parents.
          */
         std::atomic_bool m_cancel_flag;
         /**< State change lock */
         std::mutex m_state_change_mutex;
-        /* alias */
-        using child_mapping_t = typename decltype(m_children)::value_type;
-        /* alias */
-        using parent_mapping_t = typename decltype(m_parents)::value_type;
         /* alias */
         using lock_t = decltype(m_state_change_mutex);
 
@@ -345,10 +339,10 @@ namespace management
                 }
                 else {
                     ret = std::all_of(m_parents.begin(), m_parents.end(),
-                                      [this] (parent_mapping_t const & p) {
-                                          auto item = m_subsystem_map_ref.get(p);
-                                          auto s = item.first;
-                                          return (s != SubsystemState::INIT && s != SubsystemState::DESTROY);
+                                      [this] (SubsystemTag const & p) {
+                                          auto subsys = m_subsystem_map_ref.get(p);
+                                          auto state = subsys.get().get_state();
+                                          return (state != SubsystemState::INIT && state != SubsystemState::DESTROY);
                                       });
                 }
             }
@@ -363,6 +357,14 @@ namespace management
          */
         void put_message(SubsystemIPC msg) override
         {
+            if (m_state == SubsystemState::DESTROY) {
+#ifdef SUBSYSVTEM_USE_EXCEPTIONS
+                throw std::runtime_error("Attempting to call put_message after m_state == DESTROY");
+#else
+                return;
+#endif
+            }
+
             m_bus.push(msg);
             m_proceed_signal.notify_one();
         }
@@ -377,11 +379,9 @@ namespace management
             {
                 for (auto & p : m_parents)
                 {
-                    auto target = m_subsystem_map_ref.get(p);
-                    auto & state = target.first;
-                    auto & subsys = target.second;
+                    auto subsys = m_subsystem_map_ref.get(p);
 
-                    if (state == SubsystemState::RUNNING)
+                    if (subsys.get().get_state() == SubsystemState::RUNNING)
                         runnable(subsys);
                 }
             }
@@ -396,11 +396,9 @@ namespace management
             {
                 for (auto & c : m_children)
                 {
-                    auto target = m_subsystem_map_ref.get(c);
-                    auto & state = target.first;
-                    auto & subsys = target.second;
+                    auto subsys = m_subsystem_map_ref.get(c);
 
-                    if (state != SubsystemState::DESTROY)
+                    if (subsys.get().get_state() != SubsystemState::DESTROY)
                         runnable(subsys);
                 }
             }
@@ -449,7 +447,7 @@ namespace management
             case SubsystemState::DESTROY:
                 {
                     remove_parent(event.tag);
-                    set_cancel_flag();
+                    set_cancel_flag(true);
                     break;
                 }
             default:
@@ -478,7 +476,7 @@ namespace management
             case SubsystemState::STOPPED: on_stop(); break;
             case SubsystemState::DESTROY:
                 {
-                    set_cancel_flag();
+                    set_cancel_flag(true);
                     on_destroy();
                     stop_bus();
                     break;
@@ -505,6 +503,7 @@ namespace management
 
         /**
          * @brief Commits the state to the subsystem table
+         * TODO COMMENT/Doc
          */
         void commit_state(SubsystemState state)
         {
@@ -517,21 +516,24 @@ namespace management
             /* wait for a start signal */
             std::unique_lock<lock_t> lk{m_state_change_mutex};
 
-            /* spurious wakeup prevention */
             do {
                 m_proceed_signal.wait(lk, [this] { return wait_for_parents(); });
+                /* spurious wakeup prevention */
             } while (!wait_for_parents());
 
             /* do the actual state change */
             m_state = state;
-            m_subsystem_map_ref.put_state(m_tag, m_state);
 
-            for_all_active_parents([this] (SubsystemLink & p) {
-                                      p.put_message({SubsystemIPC::CHILD, m_tag, m_state});
+            SubsystemIPC msg { SubsystemIPC::CHILD, m_tag, m_state };
+
+            for_all_active_parents([msg] (SubsystemLink & p) {
+                                      p.put_message(msg);
                                    });
 
-            for_all_active_children([this] (SubsystemLink & c) {
-                                      c.put_message({SubsystemIPC::PARENT, m_tag, m_state});
+            msg.from = SubsystemIPC::PARENT;
+
+            for_all_active_children([msg] (SubsystemLink & c) {
+                                      c.put_message(msg);
                                     });
         }
 
@@ -544,8 +546,8 @@ namespace management
                 /* ignore all currently unprocessed events */
             }
 
-            m_bus.terminate();
             set_cancel_flag();
+            m_bus.terminate();
         }
 
         /**
@@ -645,7 +647,7 @@ namespace management
             case SubsystemIPC::CHILD: handle_child_event(event); break;
             case SubsystemIPC::SELF: handle_self_event(event); break;
             default:
-#ifdef SUBSYSTEM_USE_EXCEPTIONS
+#ifdef SUBSYSVTEM_USE_EXCEPTIONS
                 throw std::runtime_error("Invalid from field in SubsystemIPC");
 #else
                 /* ignore? */
@@ -663,6 +665,14 @@ namespace management
          */
         bool handle_bus_message()
         {
+            if (m_state == SubsystemState::DESTROY) {
+#ifdef SUBSYSVTEM_USE_EXCEPTIONS
+                throw std::runtime_error("Attempting to handle a message after m_state == DESTROY");
+#else
+                return false;
+#endif
+            }
+
             auto item = m_bus.wait_and_pop();
 
             /* detect termination */
@@ -700,8 +710,7 @@ namespace management
                 parent_item.get().add_child(*this);
             }
 
-            m_subsystem_map_ref.put_new(m_tag,
-                                        {m_state, std::ref<SubsystemLink>(*this)});
+            m_subsystem_map_ref.put(m_tag, std::ref<SubsystemLink>(*this));
         }
 
         Subsystem(Subsystem const &) = delete;
@@ -711,6 +720,8 @@ namespace management
          */
         virtual ~Subsystem()
         {
+            set_cancel_flag(true);
+            m_proceed_signal.notify_all();
             m_subsystem_map_ref.remove(m_tag);
         }
 
@@ -743,6 +754,9 @@ namespace management
         }
     };
 
+    ////// Note: specialize this for EACH  type of Bus since we can't have partial member function
+    //////       specialization...
+
     /**
      * @brief Specialization for the default subsystem which only handles SubsystemIPC
      */
@@ -760,7 +774,7 @@ namespace management
         class ThreadedSubsystem : public Subsystem<Bus, T, Dispatch>
     {
     private:
-        /**< managed thread. Must be joinable */
+        /**< Managed thread */
         std::thread m_thread;
 
     public:

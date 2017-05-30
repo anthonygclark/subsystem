@@ -46,22 +46,11 @@ namespace management
         return ret;
     }
 
-    void SubsystemMap::put_new(SubsystemMap::key_type key, SubsystemMap::value_type value)
+    void SubsystemMap::put(SubsystemMap::key_type key, SubsystemMap::value_type value)
     {
         std::lock_guard<decltype(m_lock)> lk{m_lock};
-        m_map.erase(key);
-        m_map.emplace(key, value);
-    }
-
-    void SubsystemMap::put_state(SubsystemMap::key_type key, SubsystemState state)
-    {
-        std::lock_guard<decltype(m_lock)> lk{m_lock};
-
-        auto item = m_map.at(key);
-        m_map.erase(key);
-        m_map.emplace(key, std::make_pair(state, item.second));
-
-        assert(m_map.at(key).first == state);
+        /* ignore return */
+        (void)m_map.emplace(key, value);
     }
 
 #ifndef NDEBUG
@@ -73,8 +62,8 @@ namespace management
         {
             str << "SubsystemMap Entry -------\n"
                 << " KEY   : " << std::to_string(pair.first) << std::endl
-                << " STATE : " << StateNameStrings[static_cast<int>(pair.second.first)] << std::endl
-                << "  NAME : " << pair.second.second.get().get_name().c_str() << std::endl;
+                << " STATE : " << StateNameStrings[static_cast<int>(pair.second.get().get_state())] << std::endl
+                << "  NAME : " << pair.second.get().get_name().c_str() << std::endl;
         }
 
         return str;
